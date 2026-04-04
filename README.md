@@ -2,6 +2,13 @@
 
 A lightweight CAN bus monitor and dashboard built using the **Cheap Yellow Display (ESP32-2432S028R)** and an external CAN transceiver. This project leverages the ESP32's built-in **TWAI (Two-Wire Automotive Interface)** to sniff, decode, and display real-time vehicle or industrial bus data.
 
+```mermaid
+graph LR;
+    A[CAN Node]-->B[CAN Transiever];
+    C[5V Voltage regulator]-->D[CYD];
+    B-->D;
+```
+
 ## 🚀 Features
 * **Real-time Monitoring:** Captures CAN frames at 500kbits/s (configurable).
 * **Visual Feedback:** Displays specific data bytes directly on the 2.8" integrated TFT screen.
