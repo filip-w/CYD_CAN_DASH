@@ -11,8 +11,11 @@ A lightweight CAN bus monitor and dashboard built using the **Cheap Yellow Displ
 ---
 
 ## 🛠 Hardware Requirements
-1. **Display:** [Cheap Yellow Display (CYD)](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display)
-2. **CAN Transceiver:** SN65HVD230 (3.3V compatible).
+
+| Module                                   | Link                                                         |
+| :---------                               | :--------------                                              |
+| SN65HVD230 VP230 CAN Bus Transceiver     | [Link to module](https://s.click.aliexpress.com/e/_c3WuskX7) |
+| ESP32 Development Board 2.8inch **CYD**  | [Link to module](https://s.click.aliexpress.com/e/_c4rNTV7J) |
 
 ### Wiring Table
 | CYD Pin    | Transceiver Pin | Function     |
