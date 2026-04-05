@@ -60,6 +60,7 @@ void setup() {
   // Set the font colour to be white with a black background, set text size multiplier to 1
   tft.setTextColor(TFT_GREEN,TFT_BLACK);  
   tft.println("CYD CAN DASH Project");
+  tft.setCursor(10, 40, 2);
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE,TFT_BLACK);
   tft.println("Setup");
@@ -113,7 +114,7 @@ void setup() {
 
     // Populate our dashboard list from JSON metadata
     addSignalToList("BatteryVoltage", 20);
-    addSignalToList("FuseTrippedCh1", 35);
+    addSignalToList("FuseTrippedCh1", 40);
   }
 
   delay(2000);
@@ -162,6 +163,7 @@ bool loadPDMConfig(const char* filename) {
   filter["params"][0]["signals"][0]["bitLength"] = true;
   filter["params"][0]["signals"][0]["factor"] = true;
   filter["params"][0]["signals"][0]["offset"] = true;
+  filter["params"][0]["signals"][0]["sourceUnit"] = true;
 
   // Deserialize using the filter
   DeserializationError error = deserializeJson(doc, file, DeserializationOption::Filter(filter));
@@ -381,5 +383,5 @@ void loop() {
       }
     }
   
-  delay(1000);
+  delay(100);
 }
