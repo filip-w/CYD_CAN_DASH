@@ -7,6 +7,7 @@ graph LR;
     A[CAN Node]-->B[CAN Transiever];
     C[5V Voltage regulator]-->D[CYD];
     B-->D;
+    E[5.5 to 32 volt DC]-->C
 ```
 
 ## 🚀 Features
@@ -18,11 +19,14 @@ graph LR;
 ---
 
 ## 🛠 Hardware Requirements
+![Prototype](https://github.com/user-attachments/assets/56ee044d-9e86-4922-be08-16ac59f6dbc3)
 
 | Module                                   | Link                                                         |
 | :---------                               | :--------------                                              |
 | SN65HVD230 VP230 CAN Bus Transceiver     | [Link to module](https://s.click.aliexpress.com/e/_c3WuskX7) |
 | ESP32 Development Board 2.8inch **CYD**  | [Link to module](https://s.click.aliexpress.com/e/_c4rNTV7J) |
+| Mini560 Pro 5A DC-DC Step Down 5V        | [Link to module](https://s.click.aliexpress.com/e/_c37COh3J) |
+
 
 ### Wiring Table
 | CYD Pin    | Transceiver Pin | Function     |
