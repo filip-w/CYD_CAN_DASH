@@ -24,7 +24,8 @@ Prototype board.
 
 3D render of version 1 PCB.
 
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/6fdb471e-b944-4a2d-9e2d-a783edc37c80" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/effd722f-f1ba-4fe4-93cd-76186626c448" />
+
 
 
 | Module                                   | Link                                                         |
