@@ -1,16 +1,15 @@
+/*
+ * Project: CYD CAN DASH
+ * Description: A dynamic CAN bus dashboard for the "Cheap Yellow Display" (ESP32).
+ * Features include SD-card based JSON configuration, real-time 
+ * Motorola bit-parsing, and an auto-updating TFT interface.
+ * Hardware: ESP32-2432S028 (CYD), CAN Transceiver (e.g., SN65HVD230)
+ * Author: [Filip-w]
+ * Date: April 2026
+ */
+
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include "driver/twai.h"
-
-// Pins used to connect to CAN bus transceiver:
-#define RX_PIN 27
-#define TX_PIN 22
-
-// Interval:
-#define POLLING_RATE_MS 1000
-
-static bool driver_installed = false;
-
-
 #include <TFT_eSPI.h> // Graphics and font library for ILI9341 driver chip
 #include <SPI.h>
 #include "FS.h"
@@ -18,13 +17,13 @@ static bool driver_installed = false;
 #include <ArduinoJson.h>
 #include <vector>
 
-#define TFT_GREY 0x5AEB // New colour
 
-TFT_eSPI tft = TFT_eSPI();  // Invoke library
+// Pins used to connect to CAN bus transceiver:
+#define RX_PIN 27
+#define TX_PIN 22
 
-// Increase this if you have a very large number of signals
-// 16KB is usually safe for ESP32/Mega
-DynamicJsonDocument doc(16384);
+// Interval:
+#define POLLING_RATE_MS 1000
 
 struct CANSignal {
     String name;
@@ -38,13 +37,21 @@ struct CANSignal {
     int displayY;
 };
 
+// Increase this if you have a very large number of signals
+// 16KB is usually safe for ESP32/Mega
+DynamicJsonDocument doc(16384);
+
 // A dynamic list to hold our signals
 std::vector<CANSignal> dashboard;
+
+static bool driver_installed = false;
+
+TFT_eSPI tft = TFT_eSPI();  // Invoke library
 
 void setup() {
 
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(0);
 
   // Start Serial:
   Serial.begin(115200);
@@ -105,16 +112,28 @@ void setup() {
   }
 
   // 1. Load the file once
-  if (loadPDMConfig("/PDM.json")) {
+  //if (loadPDMConfig("/PDM.json")) {
     
     // 2. Extract whatever you need
-    uint32_t cid;
-    int sb, bl;
-    float f, o;
+    //uint32_t cid;
+    //int sb, bl;
+    //float f, o;
 
     // Populate our dashboard list from JSON metadata
-    addSignalToList("BatteryVoltage", 20);
-    addSignalToList("FuseTrippedCh1", 40);
+    //addSignalToList("BatteryVoltage", 20);
+    //addSignalToList("FuseTrippedCh1", 40);
+   // if (!loadUserConfig("/configuration.json")) {
+   //   Serial.println("Warning: Using default signal list.");
+   // }
+  //}
+
+  // Single call to load the entire system configuration
+  if (loadSystemConfig("/configuration.json")) {
+    Serial.println("System Configured Successfully");
+  } else {
+    Serial.println("System Configuration Failed!");
+    tft.setTextColor(TFT_RED);
+    tft.println("Config Error!");
   }
 
   delay(2000);
@@ -148,6 +167,66 @@ void setup() {
 
 }
 
+/**
+ * Reads configuration.json to find the reference to the PDM/DBC file,
+ * then triggers the loading of that PDM file.
+ */
+bool loadSystemConfig(const char* configFile) {
+  File file = SD.open(configFile);
+  if (!file) {
+    Serial.println("Error: Could not open configuration.json");
+    return false;
+  }
+
+  // Use a temporary document to find the filename link
+  StaticJsonDocument<512> tempDoc;
+  DeserializationError error = deserializeJson(tempDoc, file);
+  file.close();
+
+  if (error) {
+    Serial.print("Failed to parse configuration.json: ");
+    Serial.println(error.f_str());
+    return false;
+  }
+
+  // Extract the filename from the "external_references" object 
+  const char* pdmPath = tempDoc["external_references"]["dbc_json_map"]; 
+  
+  if (pdmPath) {
+    Serial.print("Found PDM link: ");
+    Serial.println(pdmPath);
+    
+    // Prepend a slash if your SD library requires absolute paths
+    String fullPath = "/";
+    fullPath += pdmPath;
+
+    // Run the existing loadPDMConfig function using the extracted name 
+    if (loadPDMConfig(fullPath.c_str())) { 
+      
+      // Now that PDM data is loaded, populate the dashboard signals
+      JsonArray signals = tempDoc["signals"]; 
+      int yOffset = 20;
+
+      for (JsonObject sig : signals) {
+        String sName = sig["name"].as<String>(); 
+        addSignalToList(sName, yOffset); 
+        yOffset += 20; 
+      }
+      return true;
+    }
+  } else {
+    Serial.println("Error: 'dbc_json_map' not found in config.");
+  }
+
+  return false;
+}
+
+/**
+ * Loads the PDM configuration file from the SD card.
+ * Uses a JSON filter to minimize memory usage by only parsing required fields.
+ * @param filename Path to the .json file on the SD card.
+ * @return True if file was opened and parsed successfully.
+ */
 bool loadPDMConfig(const char* filename) {
   File file = SD.open(filename);
   if (!file) {
@@ -174,6 +253,47 @@ bool loadPDMConfig(const char* filename) {
     Serial.println(error.f_str());
     return false;
   }
+  return true;
+}
+
+/**
+ * Loads the user-defined display configuration from configuration.json.
+ * This determines which signals from the PDM.json are actually shown on screen.
+ */
+bool loadUserConfig(const char* filename) {
+  File file = SD.open(filename);
+  if (!file) {
+    Serial.println("Error: Could not open configuration.json");
+    return false;
+  }
+
+  // Allocate a temporary document for the user config
+  // 2048 bytes is usually plenty for a list of signal names
+  StaticJsonDocument<2048> userDoc;
+  DeserializationError error = deserializeJson(userDoc, file);
+  file.close();
+
+  if (error) {
+    Serial.print("User Config JSON Load Failed: ");
+    Serial.println(error.f_str());
+    return false;
+  }
+
+  JsonArray signals = userDoc["signals"];
+  int yOffset = 20; // Starting Y position on the TFT
+
+  for (JsonObject sig : signals) {
+    String signalName = sig["name"].as<String>();
+    
+    // Add the signal to our active dashboard vector
+    // We increment the Y position by 20 pixels for each new signal
+    addSignalToList(signalName, yOffset);
+    yOffset += 20; 
+
+    Serial.print("Configured Display for: ");
+    Serial.println(signalName);
+  }
+
   return true;
 }
 
@@ -226,10 +346,17 @@ static void handle_rx_message(twai_message_t &message) {
 }
 
 
-// The Parsing Logic
-// This function uses a "bit-mask and shift" approach. 
-// It gathers the bits from the buffer, masks them to the correct length, 
-// and then applies the linear transformation: $PhysicalValue = (Raw \times Factor) + Offset$.
+/**
+ * Extracts and scales a specific signal from a raw 8-byte CAN data frame.
+ * Implements Motorola (Big Endian) bit-order parsing and linear scaling.
+ * Calculation: PhysicalValue = (Raw * Factor) + Offset
+ * @param frameData Pointer to the 8-byte CAN data array.
+ * @param startBit The starting bit position (Motorola MSB).
+ * @param bitLength Number of bits comprising the signal.
+ * @param factor The multiplier for scaling.
+ * @param offset The value added after scaling.
+ * @return The calculated physical value as a float.
+ */
 float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, float factor, float offset) {
     uint64_t rawValue = 0;
     Serial.println("--- Motorola Trace Start ---");
@@ -274,8 +401,12 @@ bool getTWAIFrame(twai_message_t &message, uint32_t targetID) {
     return false;
 }
 
-// Processing the List
-// Processing function iterates through the std::vector. The beauty of this is that it doesn't matter how many signals you added in setup(); the loop handles them all automatically.
+/**
+ * Core logic for handling received TWAI frames.
+ * Compares incoming IDs against the registered dashboard signals and 
+ * triggers an update for any matching data.
+ * @param msg Reference to the received TWAI message structure.
+ */
 void processIncomingMessage(twai_message_t &msg) {
     // Iterate through the vector using a reference to avoid copying
     for (CANSignal &sig : dashboard) {
@@ -306,8 +437,13 @@ void updateSignalDisplay(CANSignal &sig) {
     tft.printf("%s: %7.2f %s    ", sig.name.c_str(), sig.currentValue, sig.unit.c_str());
 }
 
-// The Population Function
-// This function acts as the bridge between your JSON getter and your internal list. You can call this for every signal you want to track.
+/**
+ * Bridges the JSON configuration and the active dashboard list.
+ * Searches the JSON document for a signal name, retrieves its parameters,
+ * and appends a new CANSignal object to the global dashboard vector.
+ * @param name The "targetName" string to look for in the JSON.
+ * @param yPos The vertical pixel coordinate for this signal on the TFT.
+ */
 void addSignalToList(String name, int yPos) {
     uint32_t cid;
     int sb, bl;

@@ -1,0 +1,18 @@
+{
+  "signals": [
+    {
+      "name": "BatteryVoltage"
+
+    },
+    {
+      "name": "AnalogInput3"
+    },
+    {
+      "name": "FuseTrippedCh1"
+    }
+  ],
+  "external_references": {
+    "dbc_json_map": "PDM.json",
+    "description": "Link to the parsed DBC file containing signal scaling and offsets."
+  }
+}
