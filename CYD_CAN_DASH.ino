@@ -51,7 +51,7 @@ TFT_eSPI tft = TFT_eSPI();  // Invoke library
 void setup() {
 
   tft.init();
-  tft.setRotation(0);
+  tft.setRotation(1);
 
   // Start Serial:
   Serial.begin(115200);
@@ -66,11 +66,11 @@ void setup() {
   tft.setTextSize(2);
   // Set the font colour to be white with a black background, set text size multiplier to 1
   tft.setTextColor(TFT_GREEN,TFT_BLACK);  
-  tft.println("CYD CAN DASH Project");
-  tft.setCursor(10, 40, 2);
+  tft.println("[ CYD CAN DASH ]");
+  tft.setCursor(0, 40, 2);
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE,TFT_BLACK);
-  tft.println("Setup");
+  tft.println(" Setup");
 
   // Initialize configuration structures using macro initializers
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TX_PIN, (gpio_num_t)RX_PIN, TWAI_MODE_NORMAL);
@@ -80,14 +80,14 @@ void setup() {
   // Install TWAI driver
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     Serial.println("Driver installed");
-    tft.println("Driver installed");
+    tft.println(" Driver installed");
   } else {
     Serial.println("Failed to install driver");
-    tft.println("Failed to install driver");
+    tft.println(" Failed to install driver");
     return;
   }
 
-  tft.println("Searching for SD Card");
+  tft.println(" Searching for SD Card");
 
   if (!SD.begin()) {
     Serial.println("Card Mount Failed");
@@ -111,22 +111,6 @@ void setup() {
     Serial.println("UNKNOWN");
   }
 
-  // 1. Load the file once
-  //if (loadPDMConfig("/PDM.json")) {
-    
-    // 2. Extract whatever you need
-    //uint32_t cid;
-    //int sb, bl;
-    //float f, o;
-
-    // Populate our dashboard list from JSON metadata
-    //addSignalToList("BatteryVoltage", 20);
-    //addSignalToList("FuseTrippedCh1", 40);
-   // if (!loadUserConfig("/configuration.json")) {
-   //   Serial.println("Warning: Using default signal list.");
-   // }
-  //}
-
   // Single call to load the entire system configuration
   if (loadSystemConfig("/configuration.json")) {
     Serial.println("System Configured Successfully");
@@ -136,16 +120,16 @@ void setup() {
     tft.println("Config Error!");
   }
 
-  delay(2000);
+ 
   
 
   // Start TWAI driver
   if (twai_start() == ESP_OK) {
     Serial.println("Driver started");
-    tft.println("Driver started");
+    tft.println(" Driver started");
   } else {
     Serial.println("Failed to start driver");
-    tft.println("Failed to start driver");
+    tft.println(" Failed to start driver");
     return;
   }
 
@@ -153,18 +137,19 @@ void setup() {
   uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
   if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
     Serial.println("CAN Alerts reconfigured");
-    tft.println("CAN Alerts reconfigured");
+    tft.println(" CAN Alerts reconfigured");
   } else {
     Serial.println("Failed to reconfigure alerts");
-    tft.println("Failed to reconfigure alerts");
+    tft.println(" Failed to reconfigure alerts");
     return;
   }
 
   // TWAI driver is now successfully installed and started
   driver_installed = true;
 
-  tft.fillScreen(TFT_BLACK);
 
+  delay(3000);
+  tft.fillScreen(TFT_BLACK);  
 }
 
 /**
@@ -205,12 +190,12 @@ bool loadSystemConfig(const char* configFile) {
       
       // Now that PDM data is loaded, populate the dashboard signals
       JsonArray signals = tempDoc["signals"]; 
-      int yOffset = 20;
+      int yOffset = 0;
 
       for (JsonObject sig : signals) {
         String sName = sig["name"].as<String>(); 
         addSignalToList(sName, yOffset); 
-        yOffset += 20; 
+        yOffset += 18; 
       }
       return true;
     }

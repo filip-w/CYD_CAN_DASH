@@ -2,13 +2,39 @@
   "signals": [
     {
       "name": "BatteryVoltage"
-
+    },
+    {
+      "name": "AnalogInput1"
+    },
+    {
+      "name": "AnalogInput2"
     },
     {
       "name": "AnalogInput3"
     },
     {
+      "name": "currentCh1"
+    },
+    {
+      "name": "currentCh2"
+    },
+    {
+      "name": "currentCh3"
+    },
+    {
+      "name": "currentCh4"
+    },
+    {
       "name": "FuseTrippedCh1"
+    },
+    {
+      "name": "FuseTrippedCh2"
+    },
+    {
+      "name": "FuseTrippedCh3"
+    },
+    {
+      "name": "FuseTrippedCh4"
     }
   ],
   "external_references": {
