@@ -19,7 +19,14 @@ graph LR;
 ---
 
 ## 🛠 Hardware Requirements
+Prototype board.
 ![Prototype](https://github.com/user-attachments/assets/56ee044d-9e86-4922-be08-16ac59f6dbc3)
+
+3D render of version 1 PCB.
+
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/effd722f-f1ba-4fe4-93cd-76186626c448" />
+
+
 
 | Module                                   | Link                                                         |
 | :---------                               | :--------------                                              |
@@ -39,6 +46,19 @@ graph LR;
 ---
 
 ## 💻 Software Setup
+
+The program requires the DBC to be converted to a JSON file (use this converter [viriciti
+dbc-to-json](https://viriciti.github.io/dbc-to-json/))
+
+Then setup the configuration.json file with the signals you want to show, se example in repo.
+
+```mermaid
+graph TD;
+    A[DBC File]-->B[dbc to json];
+    B-->C[JSON file];
+    C-->D[SD card];
+    E[Configuration JSON]-->D
+```
 
 ### Dependencies
 * **TFT_eSPI**: Required for the ILI9341 display. 
