@@ -37,6 +37,12 @@ struct CANSignal {
     int displayY;
 };
 
+// Terminal state
+int cursorY = 30;
+const int margin = 5;      // Small left margin
+const int fontSize = 1;    // Font size multiplier
+const int lineHeight = 18; // Height of each line in pixels
+
 // Increase this if you have a very large number of signals
 // 16KB is usually safe for ESP32/Mega
 DynamicJsonDocument doc(16384);
@@ -70,7 +76,7 @@ void setup() {
   tft.setCursor(0, 40, 2);
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE,TFT_BLACK);
-  tft.println(" Setup");
+  termPrint("Setup");
 
   // Initialize configuration structures using macro initializers
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TX_PIN, (gpio_num_t)RX_PIN, TWAI_MODE_NORMAL);
@@ -80,14 +86,14 @@ void setup() {
   // Install TWAI driver
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     Serial.println("Driver installed");
-    tft.println(" Driver installed");
+    termPrint("Driver installed");
   } else {
     Serial.println("Failed to install driver");
-    tft.println(" Failed to install driver");
+    termPrint("Failed to install driver");
     return;
   }
 
-  tft.println(" Searching for SD Card");
+  termPrint("Searching for SD Card");
 
   if (!SD.begin()) {
     Serial.println("Card Mount Failed");
@@ -117,7 +123,7 @@ void setup() {
   } else {
     Serial.println("System Configuration Failed!");
     tft.setTextColor(TFT_RED);
-    tft.println("Config Error!");
+    termPrint("Config Error!");
   }
 
  
@@ -126,10 +132,10 @@ void setup() {
   // Start TWAI driver
   if (twai_start() == ESP_OK) {
     Serial.println("Driver started");
-    tft.println(" Driver started");
+    termPrint("Driver started");
   } else {
     Serial.println("Failed to start driver");
-    tft.println(" Failed to start driver");
+    termPrint("Failed to start driver");
     return;
   }
 
@@ -137,10 +143,10 @@ void setup() {
   uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
   if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
     Serial.println("CAN Alerts reconfigured");
-    tft.println(" CAN Alerts reconfigured");
+    termPrint("CAN Alerts reconfigured");
   } else {
     Serial.println("Failed to reconfigure alerts");
-    tft.println(" Failed to reconfigure alerts");
+    termPrint("Failed to reconfigure alerts");
     return;
   }
 
@@ -150,6 +156,17 @@ void setup() {
 
   delay(3000);
   tft.fillScreen(TFT_BLACK);  
+}
+
+void termPrint(String text) {
+  // If the next line exceeds the screen height (240px), reset
+  if (cursorY + lineHeight > tft.height()) {
+    tft.fillScreen(TFT_BLACK);
+    cursorY = 0;
+  }
+
+  tft.drawString(text, margin, cursorY);
+  cursorY += lineHeight;
 }
 
 /**
@@ -192,10 +209,14 @@ bool loadSystemConfig(const char* configFile) {
       JsonArray signals = tempDoc["signals"]; 
       int yOffset = 0;
 
+      termPrint("DBC loaded, adding signals:");
+
       for (JsonObject sig : signals) {
         String sName = sig["name"].as<String>(); 
         addSignalToList(sName, yOffset); 
+        termPrint(sName);
         yOffset += 18; 
+        delay(100);
       }
       return true;
     }
@@ -238,47 +259,6 @@ bool loadPDMConfig(const char* filename) {
     Serial.println(error.f_str());
     return false;
   }
-  return true;
-}
-
-/**
- * Loads the user-defined display configuration from configuration.json.
- * This determines which signals from the PDM.json are actually shown on screen.
- */
-bool loadUserConfig(const char* filename) {
-  File file = SD.open(filename);
-  if (!file) {
-    Serial.println("Error: Could not open configuration.json");
-    return false;
-  }
-
-  // Allocate a temporary document for the user config
-  // 2048 bytes is usually plenty for a list of signal names
-  StaticJsonDocument<2048> userDoc;
-  DeserializationError error = deserializeJson(userDoc, file);
-  file.close();
-
-  if (error) {
-    Serial.print("User Config JSON Load Failed: ");
-    Serial.println(error.f_str());
-    return false;
-  }
-
-  JsonArray signals = userDoc["signals"];
-  int yOffset = 20; // Starting Y position on the TFT
-
-  for (JsonObject sig : signals) {
-    String signalName = sig["name"].as<String>();
-    
-    // Add the signal to our active dashboard vector
-    // We increment the Y position by 20 pixels for each new signal
-    addSignalToList(signalName, yOffset);
-    yOffset += 20; 
-
-    Serial.print("Configured Display for: ");
-    Serial.println(signalName);
-  }
-
   return true;
 }
 
