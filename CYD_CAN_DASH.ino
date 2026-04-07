@@ -17,7 +17,6 @@
 #include <ArduinoJson.h>
 #include <vector>
 
-
 // Pins used to connect to CAN bus transceiver:
 #define RX_PIN 27
 #define TX_PIN 22
@@ -40,22 +39,19 @@ struct CANSignal {
 // Terminal state
 int cursorY = 30;
 const int margin = 5;      // Small left margin
-const int fontSize = 1;    // Font size multiplier
+const int fontSize = 1;
 const int lineHeight = 18; // Height of each line in pixels
 
 // Increase this if you have a very large number of signals
-// 16KB is usually safe for ESP32/Mega
 DynamicJsonDocument doc(16384);
-
 // A dynamic list to hold our signals
 std::vector<CANSignal> dashboard;
 
 static bool driver_installed = false;
 
-TFT_eSPI tft = TFT_eSPI();  // Invoke library
+TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
-
   tft.init();
   tft.setRotation(1);
 
@@ -64,26 +60,21 @@ void setup() {
 
   // Fill screen with black
   tft.fillScreen(TFT_BLACK);
-
-  // Set "cursor" at top left corner of display (0,0) and select font 2
-  // (cursor will move to next line automatically during printing with 'tft.println'
-  //  or stay on the line is there is room for the text with tft.print)
   tft.setCursor(10, 0, 2);
   tft.setTextSize(2);
-  // Set the font colour to be white with a black background, set text size multiplier to 1
-  tft.setTextColor(TFT_GREEN,TFT_BLACK);  
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.println("[ CYD CAN DASH ]");
+
   tft.setCursor(0, 40, 2);
   tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE,TFT_BLACK);
-  termPrint("Setup");
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  displaySystemInfo();
 
-  // Initialize configuration structures using macro initializers
+  termPrint("--- Configuring System ---");
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TX_PIN, (gpio_num_t)RX_PIN, TWAI_MODE_NORMAL);
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();  //Look in the api-reference for other speed sets.
+  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
   twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
-  // Install TWAI driver
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     Serial.println("Driver installed");
     termPrint("Driver installed");
@@ -96,26 +87,27 @@ void setup() {
   termPrint("Searching for SD Card");
 
   if (!SD.begin()) {
-    Serial.println("Card Mount Failed");
+    termPrint("Card Mount Failed");
     return;
   }
-    uint8_t cardType = SD.cardType();
 
+  uint8_t cardType = SD.cardType();
   if (cardType == CARD_NONE) {
-    Serial.println("No SD card attached");
+    termPrint("No SD card attached");
     return;
   }
 
-  Serial.print("SD Card Type: ");
-  if (cardType == CARD_MMC) {
-    Serial.println("MMC");
-  } else if (cardType == CARD_SD) {
-    Serial.println("SDSC");
-  } else if (cardType == CARD_SDHC) {
-    Serial.println("SDHC");
-  } else {
-    Serial.println("UNKNOWN");
+  const char* typeStr;
+  switch (cardType) {
+    case CARD_MMC:  typeStr = "MMC";    break;
+    case CARD_SD:   typeStr = "SDSC";   break;
+    case CARD_SDHC: typeStr = "SDHC";   break;
+    default:        typeStr = "UNKNOWN"; break;
   }
+
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "SD Card Type: %s", typeStr);
+  termPrint(buffer);
 
   // Single call to load the entire system configuration
   if (loadSystemConfig("/configuration.json")) {
@@ -125,9 +117,6 @@ void setup() {
     tft.setTextColor(TFT_RED);
     termPrint("Config Error!");
   }
-
- 
-  
 
   // Start TWAI driver
   if (twai_start() == ESP_OK) {
@@ -139,7 +128,6 @@ void setup() {
     return;
   }
 
-  // Reconfigure alerts to detect frame receive, Bus-Off error and RX queue full states
   uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
   if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
     Serial.println("CAN Alerts reconfigured");
@@ -150,28 +138,52 @@ void setup() {
     return;
   }
 
-  // TWAI driver is now successfully installed and started
   driver_installed = true;
 
-
-  delay(3000);
-  tft.fillScreen(TFT_BLACK);  
+  delay(2000); // Pause for 2 seconds so the user can read the last lines
+  tft.fillScreen(TFT_BLACK);
 }
 
 void termPrint(String text) {
-  // If the next line exceeds the screen height (240px), reset
   if (cursorY + lineHeight > tft.height()) {
-    tft.fillScreen(TFT_BLACK);
-    cursorY = 0;
+    delay(2000); // Pause for 2 seconds so the user can read the last lines
+    tft.fillRect(0, 30, 320, 200, TFT_BLACK);
+    cursorY = 30;
   }
-
   tft.drawString(text, margin, cursorY);
   cursorY += lineHeight;
 }
 
+void displaySystemInfo() {
+  uint32_t chipId = 0;
+  for (int i = 0; i < 17; i = i + 8) {
+    chipId |= ((ESP.getEfuseMac() >> (40 - i)) & 0xff) << i;
+  }
+
+  String model = ESP.getChipModel();
+  int revision = ESP.getChipRevision();
+  int cores = ESP.getChipCores();
+  uint32_t flashSize = ESP.getFlashChipSize() / (1024 * 1024);
+  uint32_t heapSize = ESP.getHeapSize() / 1024;
+
+  termPrint("--- SYSTEM INFO ---");
+  char buffer[50];
+  sprintf(buffer, "Model: %s (Rev %d)", model.c_str(), revision);
+  termPrint(buffer);
+  sprintf(buffer, "Cores: %d", cores);
+  termPrint(buffer);
+  sprintf(buffer, "Chip ID: %u", chipId);
+  termPrint(buffer);
+  sprintf(buffer, "Flash: %u MB", flashSize);
+  termPrint(buffer);
+  sprintf(buffer, "Heap: %u KB", heapSize);
+  termPrint(buffer);
+  termPrint("-------------------");
+}
+
 /**
- * Reads configuration.json to find the reference to the PDM/DBC file,
- * then triggers the loading of that PDM file.
+ * Reads configuration.json to find the reference to the DBC file,
+ * then triggers the loading of that DBC file.
  */
 bool loadSystemConfig(const char* configFile) {
   File file = SD.open(configFile);
@@ -180,7 +192,6 @@ bool loadSystemConfig(const char* configFile) {
     return false;
   }
 
-  // Use a temporary document to find the filename link
   StaticJsonDocument<512> tempDoc;
   DeserializationError error = deserializeJson(tempDoc, file);
   file.close();
@@ -191,56 +202,44 @@ bool loadSystemConfig(const char* configFile) {
     return false;
   }
 
-  // Extract the filename from the "external_references" object 
-  const char* pdmPath = tempDoc["external_references"]["dbc_json_map"]; 
-  
-  if (pdmPath) {
-    Serial.print("Found PDM link: ");
-    Serial.println(pdmPath);
-    
-    // Prepend a slash if your SD library requires absolute paths
+  const char* dbcPath = tempDoc["external_references"]["dbc_json_map"];
+  if (dbcPath) {
+    Serial.print("Found DBC link: ");
+    Serial.println(dbcPath);
     String fullPath = "/";
-    fullPath += pdmPath;
+    fullPath += dbcPath;
 
-    // Run the existing loadPDMConfig function using the extracted name 
-    if (loadPDMConfig(fullPath.c_str())) { 
-      
-      // Now that PDM data is loaded, populate the dashboard signals
-      JsonArray signals = tempDoc["signals"]; 
+    // Run the loadDBCConfig function using the extracted name 
+    if (loadDBCConfig(fullPath.c_str())) { 
+      JsonArray signals = tempDoc["signals"];
       int yOffset = 0;
 
       termPrint("DBC loaded, adding signals:");
-
       for (JsonObject sig : signals) {
-        String sName = sig["name"].as<String>(); 
+        String sName = sig["name"].as<String>();
         addSignalToList(sName, yOffset); 
         termPrint(sName);
         yOffset += 18; 
-        delay(100);
       }
       return true;
     }
   } else {
     Serial.println("Error: 'dbc_json_map' not found in config.");
   }
-
   return false;
 }
 
 /**
- * Loads the PDM configuration file from the SD card.
- * Uses a JSON filter to minimize memory usage by only parsing required fields.
- * @param filename Path to the .json file on the SD card.
- * @return True if file was opened and parsed successfully.
+ * Loads the DBC configuration file from the SD card.
+ * Uses a JSON filter to minimize memory usage.
  */
-bool loadPDMConfig(const char* filename) {
+bool loadDBCConfig(const char* filename) {
   File file = SD.open(filename);
   if (!file) {
-    Serial.println("Error: Could not open file.");
+    Serial.println("Error: Could not open DBC file.");
     return false;
   }
 
-  // OPTIONAL: Filter to save RAM. Only keeps the fields we actually use.
   StaticJsonDocument<200> filter;
   filter["params"][0]["canId"] = true;
   filter["params"][0]["signals"][0]["name"] = true;
@@ -250,12 +249,11 @@ bool loadPDMConfig(const char* filename) {
   filter["params"][0]["signals"][0]["offset"] = true;
   filter["params"][0]["signals"][0]["sourceUnit"] = true;
 
-  // Deserialize using the filter
   DeserializationError error = deserializeJson(doc, file, DeserializationOption::Filter(filter));
   file.close();
 
   if (error) {
-    Serial.print("JSON Load Failed: ");
+    Serial.print("DBC JSON Load Failed: ");
     Serial.println(error.f_str());
     return false;
   }
@@ -264,29 +262,16 @@ bool loadPDMConfig(const char* filename) {
 
 bool getSignalData(String targetName, uint32_t &canId, int &startBit, int &bitLength, float &factor, float &offset, String &unit) {
   JsonArray params = doc["params"];
-  
   for (JsonObject param : params) {
     JsonArray signals = param["signals"];
-    
     for (JsonObject signal : signals) {
       if (signal["name"] == targetName) {
-        canId = param["canId"]; // Taken from the parent param
+        canId = param["canId"];
         startBit = signal["startBit"];
         bitLength = signal["bitLength"];
         factor = signal["factor"];
         offset = signal["offset"];
         unit = signal["sourceUnit"].as<String>();
-
-
-        // Debug print on one line
-        Serial.print("DEBUG: Name: "); Serial.print(targetName);
-        Serial.print(" | ID: 0x"); Serial.print(canId, HEX);
-        Serial.print(" | Start: "); Serial.print(startBit);
-        Serial.print(" | Len: "); Serial.print(bitLength);
-        Serial.print(" | Factor: "); Serial.print(factor);
-        Serial.print(" | Offset: "); Serial.println(offset);
-        Serial.print(" | Unit: "); Serial.println(unit);
-
         return true;
       }
     }
@@ -294,129 +279,41 @@ bool getSignalData(String targetName, uint32_t &canId, int &startBit, int &bitLe
   return false;
 }
 
-static void handle_rx_message(twai_message_t &message) {
-  // Process received message
-  if (message.extd) {
-    Serial.println("Message is in Extended Format");
-  } else {
-    Serial.println("Message is in Standard Format");
-  }
-  Serial.printf("ID: %lx\nByte:", message.identifier);
-  if (!(message.rtr)) {
-    for (int i = 0; i < message.data_length_code; i++) {
-      Serial.printf(" %d = %02x,", i, message.data[i]);
-    }
-    Serial.println("");
-  }
-}
-
-
-/**
- * Extracts and scales a specific signal from a raw 8-byte CAN data frame.
- * Implements Motorola (Big Endian) bit-order parsing and linear scaling.
- * Calculation: PhysicalValue = (Raw * Factor) + Offset
- * @param frameData Pointer to the 8-byte CAN data array.
- * @param startBit The starting bit position (Motorola MSB).
- * @param bitLength Number of bits comprising the signal.
- * @param factor The multiplier for scaling.
- * @param offset The value added after scaling.
- * @return The calculated physical value as a float.
- */
 float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, float factor, float offset) {
     uint64_t rawValue = 0;
-    Serial.println("--- Motorola Trace Start ---");
-
     for (int i = 0; i < bitLength; i++) {
-        // Calculate the base byte from the start bit
-        // Calculate the offset byte based on how many bits we've processed (i)
         int byteIdx = (startBit / 8) + (i / 8);
-        
-        // Motorola typically reads bits 7 down to 0 within each byte
         int bitInByte = 7 - (i % 8);
-
-        // Debug line to monitor the pointer
-        Serial.printf("Signal Bit[%2d] -> Looking at Byte[%d], Bit[%d]", i, byteIdx, bitInByte);
-
         if (byteIdx < 8) {
             bool bitValue = (frameData[byteIdx] & (1 << bitInByte)) != 0;
-            Serial.printf(" | Value: %d\n", bitValue);
-            
             if (bitValue) {
-                // Shift the bits into the raw value (MSB first)
                 rawValue |= (1ULL << (bitLength - 1 - i));
             }
-        } else {
-            Serial.println(" | ERROR: Pointer exceeded 8-byte boundary!");
         }
     }
-
-    float finalVal = ((float)rawValue * factor) + offset;
-    Serial.printf("Raw Hex: 0x%llX | Scaled Value: %.2f\n", rawValue, finalVal);
-    Serial.println("--- Motorola Trace End ---");
-    
-    return finalVal;
+    return ((float)rawValue * factor) + offset;
 }
 
-// TWAI Reception Function
-// This function checks if a message is waiting in the hardware buffer and returns true only if the ID matches your target.
-bool getTWAIFrame(twai_message_t &message, uint32_t targetID) {
-    if (twai_receive(&message, pdMS_TO_TICKS(1)) == ESP_OK) {
-        return (message.identifier == targetID);
-    }
-    return false;
-}
-
-/**
- * Core logic for handling received TWAI frames.
- * Compares incoming IDs against the registered dashboard signals and 
- * triggers an update for any matching data.
- * @param msg Reference to the received TWAI message structure.
- */
 void processIncomingMessage(twai_message_t &msg) {
-    // Iterate through the vector using a reference to avoid copying
     for (CANSignal &sig : dashboard) {
         if (msg.identifier == sig.canId) {
-            sig.currentValue = parseCANSignal(
-                msg.data, 
-                sig.startBit, 
-                sig.bitLength, 
-                sig.factor, 
-                sig.offset
-            );
-            
-            // Re-use the display function from before
+            sig.currentValue = parseCANSignal(msg.data, sig.startBit, sig.bitLength, sig.factor, sig.offset);
             updateSignalDisplay(sig);
         }
     }
 }
 
-// Auto-populating the Display
-// Instead of manual coordinates, this function uses the properties stored inside the signal struct.
 void updateSignalDisplay(CANSignal &sig) {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setCursor(10, sig.displayY);
-    
-    // Using fixed-width formatting to prevent "jumping" text
-    // %-10s = Left aligned string, 10 chars wide
-    // %7.2f = Float with 2 decimal places, 7 chars wide total
-    tft.printf("%s: %7.2f %s    ", sig.name.c_str(), sig.currentValue, sig.unit.c_str());
+    tft.printf("%-12s: %7.2f %s    ", sig.name.c_str(), sig.currentValue, sig.unit.c_str());
 }
 
-/**
- * Bridges the JSON configuration and the active dashboard list.
- * Searches the JSON document for a signal name, retrieves its parameters,
- * and appends a new CANSignal object to the global dashboard vector.
- * @param name The "targetName" string to look for in the JSON.
- * @param yPos The vertical pixel coordinate for this signal on the TFT.
- */
 void addSignalToList(String name, int yPos) {
     uint32_t cid;
     int sb, bl;
     float f, o;
     String u;
-
-    // Your function call that reads from JSON
-    // Assuming it returns true if the signal was found
     if (getSignalData(name, cid, sb, bl, f, o, u)) {
         CANSignal newSig;
         newSig.name = name;
@@ -428,61 +325,40 @@ void addSignalToList(String name, int yPos) {
         newSig.unit = u;
         newSig.currentValue = 0.0;
         newSig.displayY = yPos;
-
         dashboard.push_back(newSig);
     }
 }
 
 void loop() {
   if (!driver_installed) {
-    // Driver not installed
     delay(1000);
     return;
   }
-  // Check if alert happened
+
   uint32_t alerts_triggered;
   twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
   twai_status_info_t twaistatus;
   twai_get_status_info(&twaistatus);
 
-  // Handle alerts
   if (alerts_triggered & TWAI_ALERT_ERR_PASS) {
     Serial.println("Alert: TWAI controller has become error passive.");
   }
   if (alerts_triggered & TWAI_ALERT_BUS_ERROR) {
-    Serial.println("Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
-    Serial.printf("Bus error count: %lu\n", twaistatus.bus_error_count);
+    Serial.println("Alert: Bus error occurred.");
   }
   if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL) {
-    Serial.println("Alert: The RX queue is full causing a received frame to be lost.");
-    Serial.printf("RX buffered: %lu\t", twaistatus.msgs_to_rx);
-    Serial.printf("RX missed: %lu\t", twaistatus.rx_missed_count);
-    Serial.printf("RX overrun %lu\n", twaistatus.rx_overrun_count);
-
-    // Flush the software RX queue
-    esp_err_t err = twai_clear_receive_queue();
-    if (err == ESP_OK) {
-      Serial.println("RX Queue cleared.");
-    }
+    Serial.println("Alert: RX queue full.");
+    twai_clear_receive_queue();
   }
   
-  // Set "cursor" at top left corner of display (0,0) and select font 2
-  // (cursor will move to next line automatically during printing with 'tft.println'
-  //  or stay on the line is there is room for the text with tft.print)
-  tft.setCursor(0, 0, 2);
-
-    // Check if message is received
   if (alerts_triggered & TWAI_ALERT_RX_DATA) {
-  twai_message_t rx_msg;
-      
-      // Check if a message was received (non-blocking)
-      if (twai_receive(&rx_msg, 0) == ESP_OK) {
-          // Standard data frame check
-          if (!(rx_msg.rtr)) {
-              processIncomingMessage(rx_msg);
-          }
+    twai_message_t rx_msg;
+    if (twai_receive(&rx_msg, 0) == ESP_OK) {
+      if (!(rx_msg.rtr)) {
+        processIncomingMessage(rx_msg);
       }
     }
+  }
   
   delay(100);
 }
