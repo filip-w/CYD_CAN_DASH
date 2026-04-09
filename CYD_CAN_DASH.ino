@@ -47,6 +47,13 @@ DynamicJsonDocument doc(16384);
 std::vector<CANSignal> dashboard; // Dynamic list of signals
 static bool driver_installed = false;
 
+// --- Activity & Timeout Variables ---
+unsigned long lastMessageMillis = 0;
+unsigned long lastBlinkMillis   = 0;
+bool showIcon                   = false;
+const int blinkInterval         = 500; 
+const int timeoutThreshold      = 1000; // 1 second timeout
+
 // --- Function Prototypes ---
 void termPrint(String text);
 void displaySystemInfo();
@@ -115,8 +122,11 @@ void setup() {
     return;
   }
 
-  uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
-  if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
+uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE | 
+                            TWAI_ALERT_BUS_OFF | TWAI_ALERT_BUS_ERROR | 
+                            TWAI_ALERT_TX_SUCCESS | TWAI_ALERT_TX_FAILED;
+
+  if (twai_reconfigure_alerts(alerts_to_enable, NULL)) {
     Serial.println("CAN Alerts reconfigured");
     termPrint("CAN Alerts reconfigured");
   }
@@ -136,13 +146,21 @@ void loop() {
     return;
   }
 
+  updateActivityStatus();
+
   uint32_t alerts_triggered;
   twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
-  twai_status_info_t twaistatus;
-  twai_get_status_info(&twaistatus);
 
-  if (alerts_triggered & TWAI_ALERT_ERR_PASS)      Serial.println("Alert: Error passive.");
-  if (alerts_triggered & TWAI_ALERT_BUS_ERROR)     Serial.println("Alert: Bus error.");
+  if (alerts_triggered != 0) {
+    Serial.printf("RAW ALERTS: 0x%08X\n", alerts_triggered);
+    
+    // Decoding requested states [cite: 25, 26, 27]
+    if (alerts_triggered & TWAI_ALERT_ERR_ACTIVE)  Serial.println(" -> Error Active");
+    if (alerts_triggered & TWAI_ALERT_BUS_OFF)     Serial.println(" -> Bus-Off");
+    if (alerts_triggered & TWAI_ALERT_BUS_ERROR)   Serial.println(" -> Bus Error");
+    if (alerts_triggered & TWAI_ALERT_TX_SUCCESS) Serial.println(" -> TX Success");
+    if (alerts_triggered & TWAI_ALERT_TX_FAILED)  Serial.println(" -> TX Failed");
+  }
   if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL) {
     Serial.println("Alert: RX queue full.");
     twai_clear_receive_queue();
@@ -156,6 +174,7 @@ void loop() {
       }
     }
   }
+
   delay(100);
 }
 
@@ -171,6 +190,68 @@ void termPrint(String text) {
   }
   tft.drawString(text, margin, cursorY);
   cursorY += lineHeight;
+}
+
+/**
+ * @brief Handles the top-right status icon and Serial diagnostics.
+ * Priority: Red Cross (Hardware) > Red Square (Timeout) > Blinking Triangle (OK).
+ */
+/**
+ * @brief Handles the top-right status icon and prints detailed TWAI status to Serial.
+ * Now includes proactive checks for RX errors and Bus error counts.
+ */
+void updateActivityStatus() {
+  unsigned long currentMillis = millis();
+  twai_status_info_t status;
+  
+  if (twai_get_status_info(&status) != ESP_OK) return;
+
+  // --- Proactive Serial Diagnostics ---
+  static unsigned long lastDetailedPrint = 0;
+  if (currentMillis - lastDetailedPrint >= 1000) {
+    lastDetailedPrint = currentMillis;
+    Serial.println("\n--- TWAI DETAILED STATUS ---");
+    Serial.printf("State: %d | RX Err: %u | Bus Err Count: %u\n", 
+                  status.state, status.rx_error_counter, status.bus_error_count);
+    Serial.println("----------------------------");
+  }
+
+  // Define icon area 
+  const int iconX = 300;
+  const int iconY = 5;
+  const int iconW = 18; 
+  const int iconH = 18;
+
+  // 1. PROACTIVE ERROR CHECK (Red Cross)
+  // Trigger if state is failing OR RX/Bus errors are accumulating
+  if (status.state >= TWAI_ERROR_PASSIVE || 
+      status.rx_error_counter > 10) {
+    
+    tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK); 
+    tft.drawLine(iconX, iconY, iconX + 15, iconY + 15, TFT_RED);
+    tft.drawLine(iconX + 15, iconY, iconX, iconY + 15, TFT_RED);
+    return;
+  }
+  
+  // 2. TIMEOUT CHECK (Orange Pause)
+  else if (currentMillis - lastMessageMillis > timeoutThreshold) {
+    tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK);
+    tft.fillRect(iconX + 2, iconY, 5, 15, TFT_ORANGE);
+    tft.fillRect(iconX + 10, iconY, 5, 15, TFT_ORANGE);
+    return;
+  }
+
+  // 3. ACTIVE CHECK (Blinking Green Triangle)
+  else {
+    if (currentMillis - lastBlinkMillis >= blinkInterval) {
+      lastBlinkMillis = currentMillis;
+      showIcon = !showIcon;
+      tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK);
+      if (showIcon) {
+        tft.fillTriangle(iconX, iconY, iconX, iconY + 15, iconX + 15, iconY + 7, TFT_GREEN);
+      }
+    }
+  }
 }
 
 /**
@@ -303,6 +384,9 @@ float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, floa
  * @brief Filters incoming CAN messages and updates dashboard signals with new data.
  */
 void processIncomingMessage(twai_message_t &msg) {
+  // Reset the timeout timer 
+  lastMessageMillis = millis();
+
   for (CANSignal &sig : dashboard) {
     if (msg.identifier == sig.canId) {
       sig.currentValue = parseCANSignal(msg.data, sig.startBit, sig.bitLength, sig.factor, sig.offset);
