@@ -1,8 +1,16 @@
-# ESP32 CAN Bus Dashboard (CYD)
+# 📟 CYD CAN DASH (ESP32)
 
-A lightweight CAN bus monitor and dashboard built using the **Cheap Yellow Display (ESP32-2432S028R)** and an external CAN transceiver. This project leverages the ESP32's built-in **TWAI (Two-Wire Automotive Interface)** to sniff, decode, and display real-time vehicle or industrial bus data.
+**CYD CAN DASH** is a dynamic, high-performance CAN bus monitoring dashboard designed for the **Cheap Yellow Display (ESP32-2432S028R)**. Unlike static sniffers, this project uses an SD-card-based configuration system to decode and display specific signals from a **DBC (Database CAN)** file in real-time.
 
 ![7568 (1920×1440)](https://github.com/user-attachments/assets/723b4fcd-ab40-474f-9761-5c1de8d97a25)
+
+## ✨ Key Features
+
+* Dynamic Signal Parsing: Decodes Motorola (Big Endian) bit-parsing logic directly from CAN frames.
+* SD-Card Configuration: Swap dashboards by simply editing a configuration.json file on your SD card.
+* Automotive-Grade Driver: Built on the ESP32’s native TWAI (Two-Wire Automotive Interface) driver.
+* Hardware Diagnostics: Built-in boot sequence that verifies SD card health and displays chip-level system info.
+* Robust Error Handling: Real-time visual alerts for bus errors, passive states, and RX queue overflows.
 
 ```mermaid
 graph LR;
@@ -12,23 +20,18 @@ graph LR;
     E[5.5 to 32 volt DC]-->C
 ```
 
-## 🚀 Features
-* **Real-time Monitoring:** Captures CAN frames at 500kbits/s (configurable).
-* **Visual Feedback:** Displays specific data bytes directly on the 2.8" integrated TFT screen.
-* **Serial Debugging:** Full hex dump of incoming messages via Serial Monitor.
-* **Error Handling:** Visual and serial alerts for bus errors and queue overflows.
-
 ---
 
 ## 🛠 Hardware Requirements
 Prototype board.
-![Prototype](https://github.com/user-attachments/assets/56ee044d-9e86-4922-be08-16ac59f6dbc3)
+
+<img width="700" alt="Prototype" src="https://github.com/user-attachments/assets/56ee044d-9e86-4922-be08-16ac59f6dbc3" />
 
 3D render of version 1 PCB.
 
 <img width="700" alt="image" src="https://github.com/user-attachments/assets/effd722f-f1ba-4fe4-93cd-76186626c448" />
 
-
+## Component List
 
 | Module                                   | Link                                                         |
 | :---------                               | :--------------                                              |
@@ -37,7 +40,7 @@ Prototype board.
 | Mini560 Pro 5A DC-DC Step Down 5V        | [Link to module](https://s.click.aliexpress.com/e/_c37COh3J) |
 
 
-### Wiring Table
+## Wiring Table
 | CYD Pin    | Transceiver Pin | Function     |
 | :--------- | :-------------- | :----------- |
 | **GPIO 22**| TX              | CAN Transmit |
@@ -47,12 +50,9 @@ Prototype board.
 
 ---
 
-## 💻 Software Setup
+## 💻 Software Architecture
 
-The program requires the DBC to be converted to a JSON file (use this converter [viriciti
-dbc-to-json](https://viriciti.github.io/dbc-to-json/))
-
-Then setup the configuration.json file with the signals you want to show, se example in repo.
+The dashboard relies on a two-tier JSON system to map raw CAN data to human-readable values.
 
 ```mermaid
 graph TD;
@@ -62,29 +62,50 @@ graph TD;
     E[Configuration JSON]-->D
 ```
 
-### Dependencies
-* **TFT_eSPI**: Required for the ILI9341 display. 
-* **Note:** You must configure your `User_Setup.h` for the CYD. See [this guide](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/SetupGuide.md) for the specific pin definitions.
+1. Convert your DBC to JSON
+The firmware does not read raw .dbc files directly. You must convert your vehicle's DBC file into a JSON format that the ESP32 can parse:
+    1. Navigate to the [viriciti dbc-to-json converter](https://viriciti.github.io/dbc-to-json/).
+    2. Upload your .dbc file and download the resulting .json file.
+    3. Rename this file (e.g., PDM.json) and place it on the root of your SD card.
+2. Configure the Dashboard (configuration.json)
+Create a file named configuration.json on your SD card. This file acts as the "bridge" between the display and the converted DBC data.
+    * signals: List the exact signal names as they appear in your DBC file.
+    * external_references: Set the dbc_json_map to match the filename of your converted DBC.
 
-### Configuration
-To change the CAN speed, modify this line in the `setup()` function:
-`twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();`
+```json
+{
+  "signals": [
+    { "name": "BatteryVoltage" },
+    { "name": "currentCh1" }
+  ],
+  "external_references": {
+    "dbc_json_map": "PDM.json"
+  }
+}
+```
+
+## 🚀 Setup & Installation
+1. **Library Dependencies**
+Ensure you have the following installed in your Arduino IDE:
+    * TFT_eSPI: Optimized for the ILI9341/ST7789 driver.
+    * ArduinoJson: For parsing SD card configurations.
+2. **Display Configuration**
+You must update your User_Setup.h file within the TFT_eSPI library folder to match the CYD pinout:
+    * MOSI: 13 | SCLK: 14 | CS: 15 | DC: 2 | BL: 21
+3. **CAN Speed**
+The default speed is 500kbits/s. To change this, modify the timing config in `setup():`
+`twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS();`
 
 ---
 
 ## 🔍 How It Works
-The code initializes the ESP32 TWAI driver in **Normal Mode**. 
-* **Serial Monitor:** Prints the Message ID and all 8 data bytes in Hex format.
-* **TFT Screen:** Real-time update of specific payload data (Bytes 6 and 7).
-
----
-
-## 📝 License
-Distributed under the MIT License.
+1. Boot: The system initializes the SD card and loads the system info.
+2. Mapping: It reads configuration.json, searches the DBC file for matching signal names, and stores their bit-locations in memory.
+3. Interrupts: When a CAN frame matches a tracked ID, the system parses the bits and refreshes only that specific line on the display.
 
 ---
 
 ## ✨ Future Improvements
-- [ ] Add touch-screen buttons to cycle through CAN IDs.
-- [ ] Add a graphical gauge for RPM/Speed.
-- [ ] SD card logging support.
+- [ ] **Touch Integration**: Cycle through different dashboard pages via the touch screen.
+- [ ] **Visual Gauges**: Implement circular or bar gauges for critical metrics like RPM.
+- [ ] **Datalogging**: Log incoming CAN traffic to a .csv file on the SD card.
