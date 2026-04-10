@@ -124,9 +124,9 @@ void setup() {
 
 uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE | 
                             TWAI_ALERT_BUS_OFF | TWAI_ALERT_BUS_ERROR | 
-                            TWAI_ALERT_TX_SUCCESS | TWAI_ALERT_TX_FAILED;
+                            TWAI_ALERT_TX_FAILED | TWAI_ALERT_RX_QUEUE_FULL;
 
-  if (twai_reconfigure_alerts(alerts_to_enable, NULL)) {
+  if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK) {
     Serial.println("CAN Alerts reconfigured");
     termPrint("CAN Alerts reconfigured");
   }
@@ -142,6 +142,7 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
  */
 void loop() {
   if (!driver_installed) {
+    Serial.println("Driver not installed");
     delay(1000);
     return;
   }
@@ -149,33 +150,40 @@ void loop() {
   updateActivityStatus();
 
   uint32_t alerts_triggered;
-  twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
+  // Use a short timeout to keep the loop responsive
+  twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(10));
+  twai_status_info_t twaistatus;
+  twai_get_status_info(&twaistatus);
 
-  if (alerts_triggered != 0) {
-    Serial.printf("RAW ALERTS: 0x%08X\n", alerts_triggered);
-    
-    // Decoding requested states [cite: 25, 26, 27]
-    if (alerts_triggered & TWAI_ALERT_ERR_ACTIVE)  Serial.println(" -> Error Active");
-    if (alerts_triggered & TWAI_ALERT_BUS_OFF)     Serial.println(" -> Bus-Off");
-    if (alerts_triggered & TWAI_ALERT_BUS_ERROR)   Serial.println(" -> Bus Error");
-    if (alerts_triggered & TWAI_ALERT_TX_SUCCESS) Serial.println(" -> TX Success");
-    if (alerts_triggered & TWAI_ALERT_TX_FAILED)  Serial.println(" -> TX Failed");
+  // Handle alerts
+  if (alerts_triggered & TWAI_ALERT_ERR_PASS) {
+    Serial.println("Alert: TWAI controller has become error passive.");
+  }
+  if (alerts_triggered & TWAI_ALERT_BUS_ERROR) {
+    Serial.println("Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
+    Serial.printf("Bus error count: %lu\n", twaistatus.bus_error_count);
   }
   if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL) {
-    Serial.println("Alert: RX queue full.");
-    twai_clear_receive_queue();
-  }
-  
-  if (alerts_triggered & TWAI_ALERT_RX_DATA) {
-    twai_message_t rx_msg;
-    if (twai_receive(&rx_msg, 0) == ESP_OK) {
-      if (!(rx_msg.rtr)) {
-        processIncomingMessage(rx_msg);
-      }
-    }
+    Serial.println("Alert: The RX queue is full causing a received frame to be lost.");
+    Serial.printf("RX buffered: %lu\t", twaistatus.msgs_to_rx);
+    Serial.printf("RX missed: %lu\t", twaistatus.rx_missed_count);
+    Serial.printf("RX overrun %lu\n", twaistatus.rx_overrun_count);
   }
 
-  delay(100);
+  // Process all pending messages as fast as possible [cite: 34]
+  twai_message_t message;
+  while (twai_receive(&message, 0) == ESP_OK) {
+    processIncomingMessage(message);
+  }
+
+  // Only update the screen every 100ms
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate > 100) {
+    for (CANSignal &sig : dashboard) {
+      updateSignalDisplay(sig); 
+    }
+    lastUpdate = millis();
+  }
 }
 
 /**
@@ -205,16 +213,6 @@ void updateActivityStatus() {
   twai_status_info_t status;
   
   if (twai_get_status_info(&status) != ESP_OK) return;
-
-  // --- Proactive Serial Diagnostics ---
-  static unsigned long lastDetailedPrint = 0;
-  if (currentMillis - lastDetailedPrint >= 1000) {
-    lastDetailedPrint = currentMillis;
-    Serial.println("\n--- TWAI DETAILED STATUS ---");
-    Serial.printf("State: %d | RX Err: %u | Bus Err Count: %u\n", 
-                  status.state, status.rx_error_counter, status.bus_error_count);
-    Serial.println("----------------------------");
-  }
 
   // Define icon area 
   const int iconX = 300;
@@ -390,7 +388,7 @@ void processIncomingMessage(twai_message_t &msg) {
   for (CANSignal &sig : dashboard) {
     if (msg.identifier == sig.canId) {
       sig.currentValue = parseCANSignal(msg.data, sig.startBit, sig.bitLength, sig.factor, sig.offset);
-      updateSignalDisplay(sig);
+      //updateSignalDisplay(sig);
     }
   }
 }
