@@ -28,7 +28,6 @@ const int fontSize   = 1;
 const int lineHeight = 18; // Height of each line in pixels
 int cursorY          = 30;
 
-// --- Data Structures ---
 struct CANSignal {
   String name;
   uint32_t canId;
@@ -36,9 +35,12 @@ struct CANSignal {
   int bitLength;
   float factor;
   float offset;
+  float min; // Added to scale the bar
+  float max; // Added to scale the bar
   String unit;
   float currentValue;
   int displayY;
+  bool isBarChart; // Toggle for display mode
 };
 
 // Global Objects
@@ -59,7 +61,7 @@ void termPrint(String text);
 void displaySystemInfo();
 bool loadSystemConfig(const char* configFile);
 bool loadDBCConfig(const char* filename);
-void addSignalToList(String name, int yPos);
+void addSignalToList(String name, String mode, int yPos);
 void updateSignalDisplay(CANSignal &sig);
 float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, float factor, float offset);
 
@@ -309,7 +311,8 @@ bool loadSystemConfig(const char* configFile) {
       termPrint("DBC loaded, adding signals:");
       for (JsonObject sig : signals) {
         String sName = sig["name"].as<String>();
-        addSignalToList(sName, yOffset);
+        String sMode = sig["mode"].as<String>();
+        addSignalToList(sName, sMode, yOffset);
         termPrint(sName);
         yOffset += 18;
       }
@@ -334,6 +337,8 @@ bool loadDBCConfig(const char* filename) {
   filter["params"][0]["signals"][0]["factor"] = true;
   filter["params"][0]["signals"][0]["offset"] = true;
   filter["params"][0]["signals"][0]["sourceUnit"] = true;
+  filter["params"][0]["signals"][0]["min"] = true;
+  filter["params"][0]["signals"][0]["max"] = true;
   DeserializationError error = deserializeJson(doc, file, DeserializationOption::Filter(filter));
   file.close();
   return !error;
@@ -342,18 +347,20 @@ bool loadDBCConfig(const char* filename) {
 /**
  * @brief Retrieves metadata for a specific signal name from the loaded JSON document.
  */
-bool getSignalData(String targetName, uint32_t &canId, int &startBit, int &bitLength, float &factor, float &offset, String &unit) {
+bool getSignalData(String targetName, uint32_t &canId, int &startBit, int &bitLength, float &factor, float &offset, float &min, float &max, String &unit) {
   JsonArray params = doc["params"];
   for (JsonObject param : params) {
     JsonArray signals = param["signals"];
     for (JsonObject signal : signals) {
       if (signal["name"] == targetName) {
-        canId    = param["canId"];
-        startBit = signal["startBit"];
+        canId     = param["canId"];
+        startBit  = signal["startBit"];
         bitLength = signal["bitLength"];
-        factor   = signal["factor"];
-        offset   = signal["offset"];
-        unit     = signal["sourceUnit"].as<String>();
+        factor    = signal["factor"];
+        offset    = signal["offset"];
+        min       = signal["min"] | 0.0;     // Default to 0 if missing
+        max       = signal["max"] | 100.0;   // Default to 100 if missing
+        unit      = signal["sourceUnit"].as<String>();
         return true;
       }
     }
@@ -397,20 +404,61 @@ void processIncomingMessage(twai_message_t &msg) {
  * @brief Refreshes the display text for a specific signal.
  */
 void updateSignalDisplay(CANSignal &sig) {
+  if (sig.isBarChart) {
+    drawSignalBar(sig);
+  } else {
+    // 1. Set text color AND background color (TFT_BLACK)
+    // This tells the library to draw a solid background for every character/space
+    tft.setTextColor(TFT_WHITE, TFT_BLACK); 
+
+    // 2. Draw the label at the margin [cite: 3, 91]
+    tft.setCursor(margin, sig.displayY);
+    tft.printf("%s ", sig.name.c_str());
+
+    // 3. Jump to the 140px alignment point [cite: 93]
+    tft.setCursor(140, sig.displayY);
+    
+    // 4. Use a fixed-width formatter with a minus sign (left-aligned)
+    // %-10.2f ensures the value always occupies at least 10 characters.
+    // If the number is "1.00", it adds 6 spaces at the end to "wipe" old digits.
+    tft.printf("%-10.2f %s   ", sig.currentValue, sig.unit.c_str());
+  }
+}
+
+void drawSignalBar(CANSignal &sig) {
+  const int barWidth = 120;
+  const int barHeight = 10;
+  const int barX = 140; // Horizontal start of the bar
+
+  // 1. Draw Signal Name
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(10, sig.displayY);
-  tft.printf("%-12s: %7.2f %s    ", sig.name.c_str(), sig.currentValue, sig.unit.c_str());
+  tft.setCursor(margin, sig.displayY);
+  tft.printf("%-12s", sig.name.c_str());
+
+  // 2. Calculate Fill (Clamp percentage between 0.0 and 1.0)
+  float range = sig.max - sig.min;
+  float percentage = (range > 0) ? (sig.currentValue - sig.min) / range : 0;
+  if (percentage > 1.0) percentage = 1.0;
+  if (percentage < 0.0) percentage = 0.0;
+  
+  int fillWidth = (int)(percentage * barWidth);
+
+  // 3. Render Graphics
+  tft.drawRect(barX, sig.displayY, barWidth, barHeight, TFT_WHITE); // Border
+  tft.fillRect(barX + 1, sig.displayY + 1, fillWidth, barHeight - 2, TFT_GREEN); // Fill
+  tft.fillRect(barX + 1 + fillWidth, sig.displayY + 1, barWidth - 2 - fillWidth, barHeight - 2, TFT_BLACK); // Background
 }
 
 /**
  * @brief Initializes a CANSignal struct and adds it to the active tracking vector.
  */
-void addSignalToList(String name, int yPos) {
+void addSignalToList(String name, String mode, int yPos) {
   uint32_t cid;
   int sb, bl;
-  float f, o;
+  float f, o, mn, mx;
   String u;
-  if (getSignalData(name, cid, sb, bl, f, o, u)) {
+
+  if (getSignalData(name, cid, sb, bl, f, o, mn, mx, u)) {
     CANSignal newSig;
     newSig.name         = name;
     newSig.canId        = cid;
@@ -418,9 +466,12 @@ void addSignalToList(String name, int yPos) {
     newSig.bitLength    = bl;
     newSig.factor       = f;
     newSig.offset       = o;
+    newSig.min          = mn;
+    newSig.max          = mx;
     newSig.unit         = u;
     newSig.currentValue = 0.0;
     newSig.displayY     = yPos;
+    newSig.isBarChart   = (mode == "bar");
     dashboard.push_back(newSig);
   }
 }
