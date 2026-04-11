@@ -1,37 +1,49 @@
 {
   "signals": [
     {
-      "name": "BatteryVoltage"
+      "name": "BatteryVoltage",
+      "mode": "text"
     },
     {
-      "name": "AnalogInput1"
+      "name": "AnalogInput1",
+      "mode": "text"
     },
     {
-      "name": "AnalogInput2"
+      "name": "AnalogInput2",
+      "mode": "bar"
+      
     },
     {
-      "name": "AnalogInput3"
+      "name": "AnalogInput3",
+      "mode": "text"
     },
     {
-      "name": "currentCh1"
+      "name": "currentCh1",
+      "mode": "text"
     },
     {
-      "name": "currentCh2"
+      "name": "currentCh2",
+      "mode": "bar"
     },
     {
-      "name": "currentCh3"
+      "name": "currentCh3",
+      "mode": "bar"
     },
     {
-      "name": "currentCh4"
+      "name": "currentCh4",
+      "mode": "bar"
     },
     {
-      "name": "FuseTrippedCh1"
+      "name": "FuseTrippedCh1",
+      "mode": "text"
     },
     {
-      "name": "FuseTrippedCh2"
+      "name": "FuseTrippedCh2",
+      "mode": "text"
     },
     {
-      "name": "FuseTrippedCh3"
+      "name": "FuseTrippedCh3",
+      "mode": "text"
     },
     {
       "name": "FuseTrippedCh4"

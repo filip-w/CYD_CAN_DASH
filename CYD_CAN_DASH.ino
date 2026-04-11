@@ -12,10 +12,15 @@
 #include "driver/twai.h"
 #include <TFT_eSPI.h>
 #include <SPI.h>
+
 #include "FS.h"
 #include "SD.h"
 #include <ArduinoJson.h>
 #include <vector>
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <StreamString.h>
 
 // --- Configuration & Pins ---
 #define RX_PIN          27
@@ -49,12 +54,29 @@ DynamicJsonDocument doc(16384);
 std::vector<CANSignal> dashboard; // Dynamic list of signals
 static bool driver_installed = false;
 
+WebServer server(80);
+const char* ap_ssId = "CYD_DASH_CONFIG";
+const char* ap_password = "password123"; // Min 8 characters
+
 // --- Activity & Timeout Variables ---
 unsigned long lastMessageMillis = 0;
 unsigned long lastBlinkMillis   = 0;
 bool showIcon                   = false;
 const int blinkInterval         = 500; 
 const int timeoutThreshold      = 1000; // 1 second timeout
+
+// --- Recording Globals ---
+const int USER_BUTTON_PIN = 0;       // GPIO 0 is the "BOOT" button on CYD
+bool isRecording          = false;
+File logFile;
+String currentLogFileName = "";
+unsigned long lastButtonPress = 0;
+
+// --- Icon State Tracking ---
+enum DashStatus { STATUS_OK, STATUS_TIMEOUT, STATUS_ERROR };
+DashStatus lastStatus = STATUS_ERROR; // Start with error to force first draw
+bool lastRecState = false;
+bool lastBlinkState = false;
 
 // --- Function Prototypes ---
 void termPrint(String text);
@@ -134,6 +156,24 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
   }
 
   driver_installed = true;
+
+  termPrint("Starting AP...");
+  WiFi.softAP(ap_ssId, ap_password);
+  IPAddress IP = WiFi.softAPIP();
+
+  // Logging to terminal
+  char ipBuf[32];
+  snprintf(ipBuf, sizeof(ipBuf), "IP: %s", IP.toString().c_str());
+  termPrint(ipBuf);
+
+  // Define Server Routes
+  server.on("/", handleFileList);
+  server.on("/download", handleFileDownload);
+  server.begin();
+  termPrint("Web Server Ready");
+
+  pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+
   delay(2000);
   tft.fillScreen(TFT_BLACK);
 }
@@ -143,11 +183,21 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
  * Monitors CAN bus status, handles alerts, and triggers processing of new RX data.
  */
 void loop() {
+  // --- Button Debouncing & Toggle ---
+  if (digitalRead(USER_BUTTON_PIN) == LOW) {
+    if (millis() - lastButtonPress > 500) { // 500ms debounce
+      toggleRecording();
+      lastButtonPress = millis();
+    }
+  }
+
   if (!driver_installed) {
     Serial.println("Driver not installed");
     delay(1000);
     return;
   }
+
+  server.handleClient();
 
   updateActivityStatus();
 
@@ -213,44 +263,56 @@ void termPrint(String text) {
 void updateActivityStatus() {
   unsigned long currentMillis = millis();
   twai_status_info_t status;
-  
   if (twai_get_status_info(&status) != ESP_OK) return;
 
-  // Define icon area 
   const int iconX = 300;
   const int iconY = 5;
-  const int iconW = 18; 
+  const int iconW = 18;
   const int iconH = 18;
+  const int recDotX = iconX - 20;
 
-  // 1. PROACTIVE ERROR CHECK (Red Cross)
-  // Trigger if state is failing OR RX/Bus errors are accumulating
-  if (status.state >= TWAI_ERROR_PASSIVE || 
-      status.rx_error_counter > 10) {
-    
-    tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK); 
-    tft.drawLine(iconX, iconY, iconX + 15, iconY + 15, TFT_RED);
-    tft.drawLine(iconX + 15, iconY, iconX, iconY + 15, TFT_RED);
-    return;
+  // Determine current bus state
+  DashStatus currentStatus;
+  if (status.state >= TWAI_ERROR_PASSIVE || status.rx_error_counter > 10) {
+    currentStatus = STATUS_ERROR;
+  } else if (currentMillis - lastMessageMillis > timeoutThreshold) {
+    currentStatus = STATUS_TIMEOUT;
+  } else {
+    currentStatus = STATUS_OK;
   }
+
+  // Handle Blink Timer
+  bool blinkChanged = false;
+  if (currentMillis - lastBlinkMillis >= blinkInterval) {
+    lastBlinkMillis = currentMillis;
+    showIcon = !showIcon;
+    blinkChanged = true;
+  }
+
+  // --- DRAW LOGIC (Only if state changed or blink triggered) ---
   
-  // 2. TIMEOUT CHECK (Orange Pause)
-  else if (currentMillis - lastMessageMillis > timeoutThreshold) {
-    tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK);
-    tft.fillRect(iconX + 2, iconY, 5, 15, TFT_ORANGE);
-    tft.fillRect(iconX + 10, iconY, 5, 15, TFT_ORANGE);
-    return;
+  // 1. Redraw Recording Dot if recording state or blink changed
+  if (isRecording != lastRecState || (isRecording && blinkChanged)) {
+    tft.fillCircle(recDotX, iconY + 8, 5, (isRecording && showIcon) ? TFT_RED : TFT_BLACK);
+    lastRecState = isRecording;
   }
 
-  // 3. ACTIVE CHECK (Blinking Green Triangle)
-  else {
-    if (currentMillis - lastBlinkMillis >= blinkInterval) {
-      lastBlinkMillis = currentMillis;
-      showIcon = !showIcon;
-      tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK);
-      if (showIcon) {
-        tft.fillTriangle(iconX, iconY, iconX, iconY + 15, iconX + 15, iconY + 7, TFT_GREEN);
-      }
+  // 2. Redraw Status Icon only if the status changed
+  if (currentStatus != lastStatus) {
+    tft.fillRect(iconX, iconY, iconW, iconH, TFT_BLACK); // Clear icon area once
+
+    if (currentStatus == STATUS_ERROR) {
+      tft.drawLine(iconX, iconY, iconX + 15, iconY + 15, TFT_RED);
+      tft.drawLine(iconX + 15, iconY, iconX, iconY + 15, TFT_RED);
+    } 
+    else if (currentStatus == STATUS_TIMEOUT) {
+      tft.fillRect(iconX + 2, iconY, 5, 15, TFT_ORANGE);
+      tft.fillRect(iconX + 10, iconY, 5, 15, TFT_ORANGE);
+    } 
+    else if (currentStatus == STATUS_OK) {
+      tft.fillTriangle(iconX, iconY, iconX, iconY + 15, iconX + 15, iconY + 7, TFT_GREEN);
     }
+    lastStatus = currentStatus;
   }
 }
 
@@ -389,13 +451,24 @@ float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, floa
  * @brief Filters incoming CAN messages and updates dashboard signals with new data.
  */
 void processIncomingMessage(twai_message_t &msg) {
-  // Reset the timeout timer 
   lastMessageMillis = millis();
-
+  
   for (CANSignal &sig : dashboard) {
     if (msg.identifier == sig.canId) {
       sig.currentValue = parseCANSignal(msg.data, sig.startBit, sig.bitLength, sig.factor, sig.offset);
-      //updateSignalDisplay(sig);
+      
+      // Log to SD if recording is active
+      if (isRecording && logFile) {
+        String dataRow = String(millis()) + "," + 
+                         String(sig.canId, HEX) + "," + 
+                         sig.name + "," + 
+                         String(sig.currentValue, 2) + "," + 
+                         sig.unit;
+        logFile.println(dataRow);
+        
+        // Optional: Flush periodically to prevent data loss on power-off
+        // logFile.flush(); 
+      }
     }
   }
 }
@@ -515,4 +588,90 @@ bool initSDCard() {
   snprintf(buffer, sizeof(buffer), "Used: %llu / %llu MB", usedBytes, totalBytes);
   termPrint(buffer);
   return true;
+}
+
+void handleFileList() {
+  File root = SD.open("/");
+  String html = "<html><body><h1>SD Card Files</h1><ul>";
+  
+  File file = root.openNextFile();
+  while (file) {
+    String fileName = String(file.name());
+    html += "<li><a href=\"/download?file=" + fileName + "\">" + fileName + "</a> (" + String(file.size()) + " bytes)</li>";
+    file = root.openNextFile();
+  }
+  
+  html += "</ul></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleFileDownload() {
+  if (!server.hasArg("file")) {
+    server.send(400, "text/plain", "Missing File Argument");
+    return;
+  }
+  
+  String path = server.arg("file");
+  if (!path.startsWith("/")) path = "/" + path;
+
+  if (SD.exists(path)) {
+    File file = SD.open(path, FILE_READ);
+    
+    // Extract actual filename from path (removes the leading slash)
+    String downloadName = path;
+    if (downloadName.startsWith("/")) {
+      downloadName.remove(0, 1);
+    }
+
+    // Set the header that tells the browser the real filename
+    server.sendHeader("Content-Disposition", "attachment; filename=" + downloadName);
+    server.sendHeader("Connection", "close");
+    
+    server.streamFile(file, "application/octet-stream");
+    file.close();
+  } else {
+    server.send(404, "text/plain", "File Not Found");
+  }
+}
+
+void toggleRecording() {
+  if (!isRecording) {
+    // Start Recording
+    currentLogFileName = "/log_" + String(millis()) + ".csv";
+    logFile = SD.open(currentLogFileName, FILE_WRITE);
+    
+    if (logFile) {
+      // Write CSV Header
+      String header = "Timestamp_ms,CAN_ID,Signal_Name,Value,Unit";
+      logFile.println(header);
+      isRecording = true;
+      Serial.println("Started recording: " + currentLogFileName);
+      drawBottomStatus("REC START: " + currentLogFileName, TFT_RED);
+    } else {
+      drawBottomStatus("SD ERROR: CANNOT START", TFT_YELLOW);
+    }
+  } else {
+    // Stop Recording
+    isRecording = false;
+    logFile.close();
+    Serial.println("Stopped recording.");
+    drawBottomStatus("REC STOPPED", TFT_WHITE);
+  }
+}
+/**
+ * @brief Draws a persistent status message on the very last row of the screen.
+ */
+void drawBottomStatus(String status, uint16_t color) {
+  const int statusY = 222; // Last row (240 - 18)
+  
+  // 1. Clear the bottom row area
+  tft.fillRect(0, statusY, 320, 18, TFT_BLACK);
+  
+  // 2. Draw a small separator line
+  tft.drawFastHLine(0, statusY - 2, 320, TFT_DARKGREY);
+  
+  // 3. Print the status message
+  tft.setTextColor(color, TFT_BLACK);
+  tft.setTextSize(1); // Standard small text 
+  tft.drawString(status, margin, statusY);
 }
