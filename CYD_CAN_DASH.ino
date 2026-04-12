@@ -11,7 +11,9 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include "driver/twai.h"
 #include <TFT_eSPI.h>
-#include <SPI.h>
+#include <SPI.h>//
+//#include <XPT2046_Touchscreen.h>
+#include <XPT2046_Bitbang.h>
 
 #include "FS.h"
 #include "SD.h"
@@ -26,6 +28,12 @@
 #define RX_PIN          27
 #define TX_PIN          22
 #define POLLING_RATE_MS 1000
+
+// --- Touchscreen Pins (Standard for CYD) ---
+#define XPT2046_MOSI 32
+#define XPT2046_MISO 39
+#define XPT2046_CLK 25
+#define XPT2046_CS 33
 
 // --- Display Settings ---
 const int margin     = 5;
@@ -48,11 +56,26 @@ struct CANSignal {
   bool isBarChart; // Toggle for display mode
 };
 
+struct TXButton {
+  String label;
+  String signalName;
+  float targetValue;
+  int x, y, w, h;
+  uint32_t canId; // Resolved during config load
+};
+
+std::vector<TXButton> txButtons;
+
 // Global Objects
 TFT_eSPI tft = TFT_eSPI();
 DynamicJsonDocument doc(16384);
 std::vector<CANSignal> dashboard; // Dynamic list of signals
 static bool driver_installed = false;
+
+// Create the touch object using a separate SPI bus
+//SPIClass touchSPI = SPIClass(VSPI);
+//XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
+XPT2046_Bitbang touch(XPT2046_MOSI, XPT2046_MISO, XPT2046_CLK, XPT2046_CS);
 
 WebServer server(80);
 const char* ap_ssId = "CYD_DASH_CONFIG";
@@ -172,10 +195,20 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
   server.begin();
   termPrint("Web Server Ready");
 
+  // Initialize Touch
+  //touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  
+  // Initialize touch using the pins defined for the CYD 
+  touch.begin();
+  termPrint("Touch UI Ready");
+
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
   delay(2000);
   tft.fillScreen(TFT_BLACK);
+
+  // RE-DRAW BUTTONS HERE
+  drawButtons();
 }
 
 /**
@@ -188,6 +221,7 @@ void loop() {
     if (millis() - lastButtonPress > 500) { // 500ms debounce
       toggleRecording();
       lastButtonPress = millis();
+      return;
     }
   }
 
@@ -222,7 +256,7 @@ void loop() {
     Serial.printf("RX overrun %lu\n", twaistatus.rx_overrun_count);
   }
 
-  // Process all pending messages as fast as possible [cite: 34]
+  // Process all pending messages as fast as possible
   twai_message_t message;
   while (twai_receive(&message, 0) == ESP_OK) {
     processIncomingMessage(message);
@@ -236,6 +270,9 @@ void loop() {
     }
     lastUpdate = millis();
   }
+
+  // Touch Check
+  handleTouch();
 }
 
 /**
@@ -346,6 +383,10 @@ void displaySystemInfo() {
 /**
  * @brief Reads system configuration from SD card to find DBC file paths and signal lists.
  */
+/**
+ * @brief Reads system configuration from SD card.
+ * NOW UPDATED: Loads DBC metadata first so buttons can resolve their signal data.
+ */
 bool loadSystemConfig(const char* configFile) {
   File file = SD.open(configFile);
   if (!file) {
@@ -362,26 +403,69 @@ bool loadSystemConfig(const char* configFile) {
     return false;
   }
 
+  // --- 1. Load DBC metadata first (Order Fix) ---
   const char* dbcPath = tempDoc["external_references"]["dbc_json_map"];
   if (dbcPath) {
     String fullPath = (dbcPath[0] == '/') ? String(dbcPath) : "/" + String(dbcPath);
-
-    if (loadDBCConfig(fullPath.c_str())) {
-      JsonArray signals = tempDoc["signals"];
-      int yOffset = 0;
-
-      termPrint("DBC loaded, adding signals:");
-      for (JsonObject sig : signals) {
-        String sName = sig["name"].as<String>();
-        String sMode = sig["mode"].as<String>();
-        addSignalToList(sName, sMode, yOffset);
-        termPrint(sName);
-        yOffset += 18;
-      }
-      return true;
-    }
+    loadDBCConfig(fullPath.c_str());
   }
-  return false;
+
+  // --- 2. Auto-populate Buttons on the Far Right ---
+  JsonArray tButtons = tempDoc["transmit_buttons"];
+  
+  const int BTN_W = 70;               // Fixed width
+  const int BTN_H = 30;               // Fixed height
+  const int RIGHT_X = 320 - BTN_W - 5; // 5px from right edge
+  const int START_Y = 35;             // Start below the header
+  const int SPACING_Y = 5;            // Gap between buttons
+  
+  int currentY = START_Y;
+
+  for (JsonObject b : tButtons) {
+    TXButton btn;
+    btn.label = b["label"].as<String>();
+    btn.signalName = b["signalName"].as<String>();
+    btn.targetValue = b["value"];
+    
+    // Automatic Layout
+    btn.x = RIGHT_X;
+    btn.y = currentY;
+    btn.w = BTN_W;
+    btn.h = BTN_H;
+
+    int sb, bl;
+    float f, o, mn, mx; 
+    String u;
+    
+    if (getSignalData(btn.signalName, btn.canId, sb, bl, f, o, mn, mx, u)) {
+      txButtons.push_back(btn);
+      
+      // Draw UI Element
+      tft.drawRect(btn.x, btn.y, btn.w, btn.h, TFT_SKYBLUE);
+      tft.setTextColor(TFT_WHITE);
+      // Center text roughly in button
+      tft.setCursor(btn.x + 5, btn.y + (BTN_H / 2) - 4); 
+      tft.print(btn.label);
+      
+      // Increment Y for the next button
+      currentY += (BTN_H + SPACING_Y);
+    }
+    
+    // Safety check: stop drawing if we run off the bottom of the screen
+    if (currentY + BTN_H > 210) break; 
+  }
+
+  // --- 3. Add Dashboard Signals ---
+  JsonArray signals = tempDoc["signals"];
+  int yOffset = 5; // Match signal starting position
+  for (JsonObject sig : signals) {
+    String sName = sig["name"].as<String>();
+    String sMode = sig["mode"].as<String>();
+    addSignalToList(sName, sMode, yOffset);
+    yOffset += 18; // Standard line height
+  }
+
+  return true;
 }
 
 /**
@@ -467,7 +551,7 @@ void processIncomingMessage(twai_message_t &msg) {
         logFile.println(dataRow);
         
         // Optional: Flush periodically to prevent data loss on power-off
-        // logFile.flush(); 
+        logFile.flush(); 
       }
     }
   }
@@ -489,7 +573,7 @@ void updateSignalDisplay(CANSignal &sig) {
     tft.printf("%s ", sig.name.c_str());
 
     // 3. Jump to the 140px alignment point [cite: 93]
-    tft.setCursor(140, sig.displayY);
+    tft.setCursor(120, sig.displayY);
     
     // 4. Use a fixed-width formatter with a minus sign (left-aligned)
     // %-10.2f ensures the value always occupies at least 10 characters.
@@ -501,7 +585,7 @@ void updateSignalDisplay(CANSignal &sig) {
 void drawSignalBar(CANSignal &sig) {
   const int barWidth = 120;
   const int barHeight = 10;
-  const int barX = 140; // Horizontal start of the bar
+  const int barX = 120; // Horizontal start of the bar
 
   // 1. Draw Signal Name
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -553,7 +637,7 @@ void addSignalToList(String name, String mode, int yPos) {
  * @brief Mounts the SD card and prints detailed storage diagnostics.
  */
 bool initSDCard() {
-  termPrint("Searching for SD Card...");
+
   if (!SD.begin()) {
     termPrint("Card Mount Failed");
     return false;
@@ -568,8 +652,7 @@ bool initSDCard() {
   const char* typeStr;
   switch (cardType) {
     case CARD_MMC:  typeStr = "MMC";    break;
-    case CARD_SD:   typeStr = "SDSC";
-                    break;
+    case CARD_SD:   typeStr = "SDSC";   break;
     case CARD_SDHC: typeStr = "SDHC";   break;
     default:        typeStr = "UNKNOWN"; break;
   }
@@ -577,6 +660,22 @@ bool initSDCard() {
   char buffer[64];
   snprintf(buffer, sizeof(buffer), "Type: %s", typeStr);
   termPrint(buffer);
+
+  // --- Print Files on SD Card ---
+  termPrint("Files found:");
+  File root = SD.open("/");
+  if (root) {
+    File file = root.openNextFile();
+    while (file) {
+      String fileName = String(file.name());
+      termPrint(" - " + fileName); // Print each filename to the display
+      file = root.openNextFile();
+    }
+    root.close();
+  } else {
+    termPrint("Error opening root!");
+  }
+  // --------------------------------------------
 
   uint64_t cardSize = SD.cardSize() / (1024 * 1024);
   snprintf(buffer, sizeof(buffer), "Capacity: %llu MB", cardSize);
@@ -636,9 +735,14 @@ void handleFileDownload() {
 
 void toggleRecording() {
   if (!isRecording) {
+    // 1. Force Touch CS High to release the bus
+    pinMode(XPT2046_CS, OUTPUT);
+    digitalWrite(XPT2046_CS, HIGH); 
+    delay(10);
+
     // Start Recording
     currentLogFileName = "/log_" + String(millis()) + ".csv";
-    logFile = SD.open(currentLogFileName, FILE_WRITE);
+    logFile = SD.open(currentLogFileName, FILE_APPEND);
     
     if (logFile) {
       // Write CSV Header
@@ -674,4 +778,72 @@ void drawBottomStatus(String status, uint16_t color) {
   tft.setTextColor(color, TFT_BLACK);
   tft.setTextSize(1); // Standard small text 
   tft.drawString(status, margin, statusY);
+}
+
+void handleTouch() {
+
+  TouchPoint p = touch.getTouch();
+    if (p.x != 0 || p.y != 0) {
+      int x = map(p.x, 200, 3700, 0, 320); // Map to screen width
+      int y = map(p.y, 240, 3800, 0, 240); // Map to screen height
+
+      if (millis() - lastButtonPress > 600) {
+        for (auto &btn : txButtons) {
+          if (x >= btn.x && x <= (btn.x + btn.w) && y >= btn.y && y <= (btn.y + btn.h)) {
+            
+            // 1. Prepare empty frame
+            twai_message_t tx_msg;
+            tx_msg.identifier = btn.canId;
+            tx_msg.data_length_code = 8;
+            tx_msg.extd = 0;
+            memset(tx_msg.data, 0, 8);
+
+            // 2. Lookup signal metadata again to ensure correct packing
+            uint32_t cid; int sb, bl; float f, o, mn, mx; String u;
+            if (getSignalData(btn.signalName, cid, sb, bl, f, o, mn, mx, u)) {
+              packCANSignal(tx_msg.data, sb, bl, btn.targetValue, f, o);
+              
+              // 3. Transmit [cite: 33]
+              if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
+                drawBottomStatus("SENT: " + btn.signalName, TFT_CYAN);
+              }
+            }
+            lastButtonPress = millis();
+          }
+        }
+      }
+    }
+}
+
+void packCANSignal(uint8_t* frameData, int startBit, int bitLength, float value, float factor, float offset) {
+  uint64_t rawValue = (uint64_t)((value - offset) / factor);
+  
+  for (int i = 0; i < bitLength; i++) {
+    int byteIdx = (startBit / 8) + (i / 8);
+    int bitInByte = 7 - (i % 8); // Motorola/Big Endian logic
+    
+    if (byteIdx < 8) {
+      if (rawValue & (1ULL << (bitLength - 1 - i))) {
+        frameData[byteIdx] |= (1 << bitInByte);
+      } else {
+        frameData[byteIdx] &= ~(1 << bitInByte);
+      }
+    }
+  }
+}
+
+void drawButtons() {
+  for (auto &btn : txButtons) {
+    // Draw the button border
+    tft.drawRect(btn.x, btn.y, btn.w, btn.h, TFT_SKYBLUE);
+    
+    // Set text properties
+    tft.setTextColor(TFT_WHITE, TFT_BLACK); 
+    tft.setTextSize(1);
+    
+    // Center text vertically
+    int textY = btn.y + (btn.h / 2) - 4;
+    tft.setCursor(btn.x + 5, textY);
+    tft.print(btn.label);
+  }
 }

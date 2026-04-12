@@ -49,6 +49,28 @@
       "name": "FuseTrippedCh4"
     }
   ],
+  "transmit_buttons": [
+    {
+      "label": "Res Ch1",
+      "signalName": "ResetFuseCh1",
+      "value": 1
+    },
+    {
+      "label": "Ch1 50%",
+      "signalName": "ControlCh1PWM",
+      "value": 50.0
+    },
+    {
+      "label": "Ch1",
+      "signalName": "ControlCh1",
+      "value": 1
+    },
+    {
+      "label": "Ch2",
+      "signalName": "ControlCh2",
+      "value": 1
+    }
+  ],
   "external_references": {
     "dbc_json_map": "PDM.json",
     "description": "Link to the parsed DBC file containing signal scaling and offsets."
