@@ -8,15 +8,16 @@
  * Date:        April 2026
  */
 
+#include <LovyanGFX.hpp>
+#include "LovyanGFX_CYD_Settings.h"
+#define _LIB_NAME "LovyanGFX"
+
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include "driver/twai.h"
-#include <TFT_eSPI.h>
-#include <SPI.h>//
-//#include <XPT2046_Touchscreen.h>
-#include <XPT2046_Bitbang.h>
 
 #include "FS.h"
 #include "SD.h"
+#include "SPI.h"
 #include <ArduinoJson.h>
 #include <vector>
 
@@ -29,11 +30,16 @@
 #define TX_PIN          22
 #define POLLING_RATE_MS 1000
 
-// --- Touchscreen Pins (Standard for CYD) ---
-#define XPT2046_MOSI 32
-#define XPT2046_MISO 39
-#define XPT2046_CLK 25
-#define XPT2046_CS 33
+// --- Pins for your specific SD Card ---
+#define SD_MISO 19
+#define SD_MOSI 23
+#define SD_SCLK 18
+#define SD_CS   5
+
+// Create a separate SPI instance for the SD card
+SPIClass sdSPI(VSPI);
+
+LGFX tft;
 
 // --- Display Settings ---
 const int margin     = 5;
@@ -67,15 +73,9 @@ struct TXButton {
 std::vector<TXButton> txButtons;
 
 // Global Objects
-TFT_eSPI tft = TFT_eSPI();
 DynamicJsonDocument doc(16384);
 std::vector<CANSignal> dashboard; // Dynamic list of signals
 static bool driver_installed = false;
-
-// Create the touch object using a separate SPI bus
-//SPIClass touchSPI = SPIClass(VSPI);
-//XPT2046_Touchscreen touch(XPT2046_CS, XPT2046_IRQ);
-XPT2046_Bitbang touch(XPT2046_MOSI, XPT2046_MISO, XPT2046_CLK, XPT2046_CS);
 
 WebServer server(80);
 const char* ap_ssId = "CYD_DASH_CONFIG";
@@ -116,7 +116,7 @@ float parseCANSignal(const uint8_t* frameData, int startBit, int bitLength, floa
  */
 void setup() {
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(6);
   tft.fillScreen(TFT_BLACK);
   
   Serial.begin(115200);
@@ -182,6 +182,7 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
 
   termPrint("Starting AP...");
   WiFi.softAP(ap_ssId, ap_password);
+  WiFi.setSleep(false); // Disables WiFi power saving to stop the GPIO 39 interference
   IPAddress IP = WiFi.softAPIP();
 
   // Logging to terminal
@@ -194,13 +195,6 @@ uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_ACTIVE |
   server.on("/download", handleFileDownload);
   server.begin();
   termPrint("Web Server Ready");
-
-  // Initialize Touch
-  //touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  
-  // Initialize touch using the pins defined for the CYD 
-  touch.begin();
-  termPrint("Touch UI Ready");
 
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
@@ -638,7 +632,9 @@ void addSignalToList(String name, String mode, int yPos) {
  */
 bool initSDCard() {
 
-  if (!SD.begin()) {
+  sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+
+  if (!SD.begin(SD_CS, sdSPI)) {
     termPrint("Card Mount Failed");
     return false;
   }
@@ -735,11 +731,6 @@ void handleFileDownload() {
 
 void toggleRecording() {
   if (!isRecording) {
-    // 1. Force Touch CS High to release the bus
-    pinMode(XPT2046_CS, OUTPUT);
-    digitalWrite(XPT2046_CS, HIGH); 
-    delay(10);
-
     // Start Recording
     currentLogFileName = "/log_" + String(millis()) + ".csv";
     logFile = SD.open(currentLogFileName, FILE_APPEND);
@@ -781,38 +772,31 @@ void drawBottomStatus(String status, uint16_t color) {
 }
 
 void handleTouch() {
-
-  TouchPoint p = touch.getTouch();
-    if (p.x != 0 || p.y != 0) {
-      int x = map(p.x, 200, 3700, 0, 320); // Map to screen width
-      int y = map(p.y, 240, 3800, 0, 240); // Map to screen height
-
-      if (millis() - lastButtonPress > 600) {
-        for (auto &btn : txButtons) {
-          if (x >= btn.x && x <= (btn.x + btn.w) && y >= btn.y && y <= (btn.y + btn.h)) {
-            
-            // 1. Prepare empty frame
+  int32_t x, y;
+  if (tft.getTouch(&x, &y)) { // Automatically gets mapped X and Y
+    if (millis() - lastButtonPress > 600) {
+      for (auto &btn : txButtons) {
+        if (x >= btn.x && x <= (btn.x + btn.w) && y >= btn.y && y <= (btn.y + btn.h)) {
+                      // 1. Prepare empty frame
             twai_message_t tx_msg;
             tx_msg.identifier = btn.canId;
             tx_msg.data_length_code = 8;
             tx_msg.extd = 0;
             memset(tx_msg.data, 0, 8);
-
-            // 2. Lookup signal metadata again to ensure correct packing
-            uint32_t cid; int sb, bl; float f, o, mn, mx; String u;
-            if (getSignalData(btn.signalName, cid, sb, bl, f, o, mn, mx, u)) {
-              packCANSignal(tx_msg.data, sb, bl, btn.targetValue, f, o);
-              
-              // 3. Transmit [cite: 33]
-              if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
-                drawBottomStatus("SENT: " + btn.signalName, TFT_CYAN);
-              }
+          
+          uint32_t cid;
+          int sb, bl; float f, o, mn, mx; String u;
+          if (getSignalData(btn.signalName, cid, sb, bl, f, o, mn, mx, u)) {
+            packCANSignal(tx_msg.data, sb, bl, btn.targetValue, f, o);
+            if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
+              drawBottomStatus("SENT: " + btn.signalName, TFT_CYAN);
             }
-            lastButtonPress = millis();
           }
+          lastButtonPress = millis();
         }
       }
     }
+  }
 }
 
 void packCANSignal(uint8_t* frameData, int startBit, int bitLength, float value, float factor, float offset) {
