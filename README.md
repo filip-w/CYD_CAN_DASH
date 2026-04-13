@@ -29,7 +29,7 @@ Prototype board.
 
 3D render of version 1 PCB.
 
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/effd722f-f1ba-4fe4-93cd-76186626c448" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/55a64f26-b85d-43d4-abf6-2b454409c6c2" />
 
 ## Component List
 
