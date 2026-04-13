@@ -1,6 +1,8 @@
 # 📟 CYD CAN DASH (ESP32)
 
-**CYD CAN DASH** is a dynamic, high-performance CAN bus monitoring dashboard designed for the **Cheap Yellow Display (ESP32-2432S028R)**. Unlike static sniffers, this project uses an SD-card-based configuration system to decode and display specific signals from a **DBC (Database CAN)** file in real-time.
+**CYD CAN DASH** is a dynamic, high-performance CAN bus monitoring dashboard designed for the **Cheap Yellow Display (ESP32-2432S028R)**. 
+
+This project uses an SD-card-based configuration system to decode and display specific signals from a **DBC (Database CAN)** file in real-time.
 
 ![7568 (1920×1440)](https://github.com/user-attachments/assets/723b4fcd-ab40-474f-9761-5c1de8d97a25)
 
