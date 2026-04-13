@@ -56,14 +56,14 @@ Prototype board.
 The dashboard utilizes a two-tier JSON system to map binary bus data to human-readable information.
 
 1. DBC to JSON Conversion
-The firmware parses JSON-formatted database files.
+   
+    The firmware parses JSON-formatted database files.
+    Convert your .dbc file using the [Viriciti DBC-to-JSON converter](https://viriciti.github.io/dbc-to-json/).
+    Place the resulting .json file (e.g., PDM.json) on the SD card root.
 
-Convert your .dbc file using the [Viriciti DBC-to-JSON converter](https://viriciti.github.io/dbc-to-json/).
-
-Place the resulting .json file (e.g., PDM.json) on the SD card root.
-
-2. Configuration (configuration.json)
-Define which signals to display and which buttons to render.
+3. Configuration (configuration.json)
+   
+    Define which signals to display and which buttons to render.
 ```json
 {
   "signals": [
