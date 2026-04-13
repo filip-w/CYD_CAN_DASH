@@ -7,10 +7,11 @@
 ## ✨ Key Features
 
 * Dynamic Signal Parsing: Decodes Motorola (Big Endian) bit-parsing logic directly from CAN frames.
-* SD-Card Configuration: Swap dashboards by simply editing a configuration.json file on your SD card.
-* Automotive-Grade Driver: Built on the ESP32’s native TWAI (Two-Wire Automotive Interface) driver.
-* Hardware Diagnostics: Built-in boot sequence that verifies SD card health and displays chip-level system info.
-* Robust Error Handling: Real-time visual alerts for bus errors, passive states, and RX queue overflows.
+* SD-Card Configuration: Hot-swap dashboard layouts by editing a configuration.json file—no recompilation required.
+* Integrated Web Server: Download recorded log files or view file lists over Wi-Fi.
+* Real-time Data Logging: Record incoming CAN traffic to .csv files on the SD card via the physical "BOOT" button.
+* Interactive Controls: Send CAN messages using on-screen touch buttons resolved from DBC metadata.
+* Hardware Diagnostics: Visual boot sequence verifying SD health, chip revision, and system memory.
 
 ```mermaid
 graph LR;
@@ -22,7 +23,7 @@ graph LR;
 
 ---
 
-## 🛠 Hardware Requirements
+## 🛠 Hardware Setup
 Prototype board.
 
 <img width="700" alt="Prototype" src="https://github.com/user-attachments/assets/56ee044d-9e86-4922-be08-16ac59f6dbc3" />
@@ -33,11 +34,11 @@ Prototype board.
 
 ## Component List
 
-| Module                                   | Link                                                         |
-| :---------                               | :--------------                                              |
-| SN65HVD230 VP230 CAN Bus Transceiver     | [Link to module](https://s.click.aliexpress.com/e/_c3WuskX7) |
-| ESP32 Development Board 2.8inch **CYD**  | [Link to module](https://s.click.aliexpress.com/e/_c4rNTV7J) |
-| Mini560 Pro 5A DC-DC Step Down 5V        | [Link to module](https://s.click.aliexpress.com/e/_c37COh3J) |
+| Module                                   | Purpose     						 	| Link                                                         |
+| :---------                               | :---------	 						 	| :--------------                                              |
+| SN65HVD230 VP230 CAN Bus Transceiver     | Core processor and 2.8" TFT display 	| [Link to module](https://s.click.aliexpress.com/e/_c3WuskX7) |
+| ESP32 Development Board 2.8inch **CYD**  | CAN Bus Transceiver (3.3V compatible)  | [Link to module](https://s.click.aliexpress.com/e/_c4rNTV7J) |
+| Mini560 Pro 5A DC-DC Step Down 5V        | DC-DC Step Down (5V)					| [Link to module](https://s.click.aliexpress.com/e/_c37COh3J) |
 
 
 ## Wiring Table
@@ -52,60 +53,55 @@ Prototype board.
 
 ## 💻 Software Architecture
 
-The dashboard relies on a two-tier JSON system to map raw CAN data to human-readable values.
+The dashboard utilizes a two-tier JSON system to map binary bus data to human-readable information.
 
-```mermaid
-graph TD;
-    A[DBC File]-->B[dbc to json];
-    B-->C[JSON file];
-    C-->D[SD card];
-    E[Configuration JSON]-->D
-```
+1. DBC to JSON Conversion
+The firmware parses JSON-formatted database files.
 
-1. Convert your DBC to JSON
-The firmware does not read raw .dbc files directly. You must convert your vehicle's DBC file into a JSON format that the ESP32 can parse:
-    1. Navigate to the [viriciti dbc-to-json converter](https://viriciti.github.io/dbc-to-json/).
-    2. Upload your .dbc file and download the resulting .json file.
-    3. Rename this file (e.g., PDM.json) and place it on the root of your SD card.
-2. Configure the Dashboard (configuration.json)
-Create a file named configuration.json on your SD card. This file acts as the "bridge" between the display and the converted DBC data.
-    * signals: List the exact signal names as they appear in your DBC file.
-    * external_references: Set the dbc_json_map to match the filename of your converted DBC.
+Convert your .dbc file using the [Viriciti DBC-to-JSON converter](https://viriciti.github.io/dbc-to-json/).
 
+Place the resulting .json file (e.g., PDM.json) on the SD card root.
+
+2. Configuration (configuration.json)
+Define which signals to display and which buttons to render.
 ```json
 {
   "signals": [
-    { "name": "BatteryVoltage" },
-    { "name": "currentCh1" }
+    { "name": "BatteryVoltage", "mode": "text" },
+    { "name": "EngineRPM", "mode": "bar" }
+  ],
+  "transmit_buttons": [
+    { 
+      "label": "FAN ON", 
+      "signalName": "CoolingFanCmd", 
+      "value": 1.0 
+    }
   ],
   "external_references": {
-    "dbc_json_map": "PDM.json"
+    "dbc_json_map": "VehicleData.json"
   }
 }
 ```
 
-## 🚀 Setup & Installation
-1. **Library Dependencies**
-Ensure you have the following installed in your Arduino IDE:
-    * TFT_eSPI: Optimized for the ILI9341/ST7789 driver.
-    * ArduinoJson: For parsing SD card configurations.
-2. **Display Configuration**
-You must update your User_Setup.h file within the TFT_eSPI library folder to match the CYD pinout:
-    * MOSI: 13 | SCLK: 14 | CS: 15 | DC: 2 | BL: 21
+## 🚀 Installation
+1. **Dependencies**: 
+Install LovyanGFX, ArduinoJson, and ensure SPI, SD, and FS libraries are available.
+2. **Display Configuration**: 
+Update your LovyanGFX_CYD_Settings.h to match the CYD pinout (ILI9341/ST7789).
 3. **CAN Speed**
 The default speed is 500kbits/s. To change this, modify the timing config in `setup():`
 `twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS();`
 
 ---
 
-## 🔍 How It Works
-1. Boot: The system initializes the SD card and loads the system info.
-2. Mapping: It reads configuration.json, searches the DBC file for matching signal names, and stores their bit-locations in memory.
-3. Interrupts: When a CAN frame matches a tracked ID, the system parses the bits and refreshes only that specific line on the display.
+## 🔍 Visual Indicators
+The dashboard includes a status icon in the top-right corner:
+* Green Triangle: System OK / Receiving Data.
+* Orange Bars: Timeout (No messages received for >1s).
+* Red Cross: Bus Error or Passive State.Blinking 
+* Red Dot: Data logging (SD Recording) active.
 
----
-
-## ✨ Future Improvements
-- [ ] **Touch Integration**: Cycle through different dashboard pages via the touch screen.
-- [ ] **Visual Gauges**: Implement circular or bar gauges for critical metrics like RPM.
-- [ ] **Datalogging**: Log incoming CAN traffic to a .csv file on the SD card.
+✨ Future Roadmap
+[ ] Touch Pagination: Swipe to switch between multiple signal pages.
+[ ] Custom Gauges: High-refresh circular gauges for performance metrics.
+[ ] WiFi Configuration: Edit the configuration.json directly via the web portal.
